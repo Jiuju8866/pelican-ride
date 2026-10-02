@@ -8,7 +8,7 @@ const { chromium } = require('playwright-core');
   p.on('request', r => { if (!r.url().startsWith('file:') && !r.url().startsWith('data:')) reqs.push(r.url()); });
   await p.goto('file:///workspace/pelican-ride/pelican-ride.html'); await p.waitForTimeout(800);
   await p.click('#start'); await p.keyboard.down('ArrowUp'); await p.waitForTimeout(1500); await p.keyboard.up('ArrowUp');
-  await p.click('#segctl [data-route="field"]'); await p.waitForTimeout(1500);
+  await p.click('#routeBtn'); await p.waitForTimeout(300); await p.click('#routeGrid [data-route="field"]'); await p.waitForTimeout(1500);
   await p.click('#home'); await p.waitForTimeout(300);
   console.log(JSON.stringify(await p.evaluate(() => window.__pelican.stats)));
   console.log('errors:', errs.length ? errs : 'none', 'external requests:', reqs.length ? reqs : 'none');

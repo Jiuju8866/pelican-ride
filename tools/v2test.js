@@ -11,7 +11,7 @@ async function overlapCheck(page, label) {
     const L = window.__pelican.layout, rects = [];
     const add = (name, r) => rects.push({ name, l: r.left, t: r.top, r: r.right, b: r.bottom });
     const el = sel => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return r.width ? r : null; };
-    for (const sel of ['#hud', '#segctl', '#pauseBtn', '#muteBtn', '#home', '#bellBtn']) { const r = el(sel); if (r) add(sel, r); }
+    for (const sel of ['#hud', '#routeBtn', '#pauseBtn', '#muteBtn', '#home', '#bellBtn']) { const r = el(sel); if (r) add(sel, r); }
     const j = L.joy; add('joystick', { left: j.x - j.r, right: j.x + j.r, top: j.y - j.r - 24, bottom: j.y + j.r });
     const s = L.slider; add('slider', { left: s.x - s.w * 0.75, right: s.x + s.w * 0.75, top: s.top - s.w * 0.38 - 18, bottom: s.bottom + s.w * 0.3 });
     const hits = [];

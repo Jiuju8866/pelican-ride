@@ -43,7 +43,7 @@ const frameStats = page => page.evaluate(() => {
   // ---- every time of day x weather renders, on both routes
   const looks = {};
   for (const route of ['sea', 'field']) {
-    if (route === 'field') { await page.click('#segctl [data-route="field"]'); await sleep(1200); }
+    if (route === 'field') { await page.click('#routeBtn'); await sleep(300); await page.click('#routeGrid [data-route="field"]'); await sleep(1200); }
     for (const tod of [0, 1, 2, 3]) for (const w of ['clear', 'rain', 'petals']) {
       await D('setTime', tod); await D('setWeather', w); await sleep(450);
       const st = await S(), fs = await frameStats(page);

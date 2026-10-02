@@ -10,7 +10,7 @@ async function overlap(page, label) {
   const res = await page.evaluate(() => {
     const L = window.__pelican.layout, R = [];
     const add = (n, r) => R.push({ n, l: r.left, t: r.top, r: r.right, b: r.bottom });
-    for (const sel of ['#hud', '#segctl', '#pauseBtn', '#muteBtn', '#home', '#bellBtn', '#photoBtn']) { const e = document.querySelector(sel); if (!e) continue; const r = e.getBoundingClientRect(); if (r.width && getComputedStyle(e).display !== 'none') add(sel, r); }
+    for (const sel of ['#hud', '#routeBtn', '#pauseBtn', '#muteBtn', '#home', '#bellBtn', '#photoBtn']) { const e = document.querySelector(sel); if (!e) continue; const r = e.getBoundingClientRect(); if (r.width && getComputedStyle(e).display !== 'none') add(sel, r); }
     const j = L.joy; add('joystick', { left: j.x - j.r, right: j.x + j.r, top: j.y - j.r - 24, bottom: j.y + j.r });
     const s = L.slider; add('slider', { left: s.x - s.w * 0.75, right: s.x + s.w * 0.75, top: s.top - s.w * 0.38 - 18, bottom: s.bottom + s.w * 0.3 });
     const hits = []; for (let a = 0; a < R.length; a++) for (let b = a + 1; b < R.length; b++) { const A = R[a], B = R[b]; if (A.l < B.r && B.l < A.r && A.t < B.b && B.t < A.b) hits.push(A.n + ' x ' + B.n); }
@@ -119,7 +119,9 @@ async function setSpeed(page, frac) {
   // 换路线 from results
   await page.evaluate(() => window.__pelican.debug.warp(0.99));
   await until(page, () => !document.getElementById('results').classList.contains('hidden'), 15000);
-  await page.click('#switchBtn'); await sleep(900);
+  await page.click('#switchBtn'); await sleep(300);
+  ok(await page.isVisible('#routePanel'), '换路线 opens the route picker');
+  await page.click('#routeGrid [data-route="field"]'); await sleep(900);
   s = await S(page);
   ok(s.route === 'field' && s.state === 'play' && s.idx < 30, '换路线 starts the countryside journey');
   await setSpeed(page, 0.75);
@@ -137,7 +139,7 @@ async function setSpeed(page, frac) {
   await page.reload(); await sleep(800);
   const after = await S(page);
   ok(after.save.coins === before.save.coins && after.save.totalDist > 0 && after.save.best.sea > 0, `save persisted after reload (coins ${after.save.coins}, total ${after.save.totalDist.toFixed(0)} m)`);
-  ok((await page.textContent('#totals')).includes('4/8'), 'title totals: ' + (await page.textContent('#totals')));
+  ok((await page.textContent('#totals')).includes('4/28'), 'title totals: ' + (await page.textContent('#totals')));
   // pause still freezes
   await page.click('#start'); await setSpeed(page, 0.8); await sleep(1200);
   await page.keyboard.press('KeyP'); await sleep(200);

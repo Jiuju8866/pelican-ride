@@ -41,7 +41,7 @@ async function drive(page, ms, bias = 0) {
   await drive(page, 6000, -0.3);
   await page.screenshot({ path: `${OUT}/02b-seaside-riding.png` });
   // switch route in-game
-  await page.click('#segctl [data-route="field"]');
+  await page.click('#routeBtn'); await page.waitForTimeout(300); await page.click('#routeGrid [data-route="field"]');
   await page.waitForTimeout(500);
   await drive(page, 5000);
   await page.keyboard.down('ArrowLeft'); await page.waitForTimeout(300);

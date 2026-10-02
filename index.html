@@ -57,7 +57,8 @@
   #pauseBtn.is-paused { background: var(--teal); box-shadow: 0 3px 0 #1d8f84, 0 6px 14px rgba(43,179,166,0.3); }
   .iconbtn:active { transform: translateY(2px); }
   body:not(.playing) .play-only { display: none !important; }
-  body.paused #bellBtn, body.paused #segctl { opacity: 0.5; pointer-events: none; }
+  body.paused #bellBtn { opacity: 0.5; pointer-events: none; }
+  #routeBtn { padding: 0 13px 0 10px; }
 
   #bellBtn {
     position: fixed; width: 48px; height: 48px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.95);
@@ -116,28 +117,39 @@
   }
   .card .en { font-size: 12px; letter-spacing: 3px; color: #7fa3b3; margin-top: 4px; font-weight: 700; }
   .card .sub { margin: 10px 0 14px; font-size: 15px; }
-  .routes { display: flex; gap: 12px; justify-content: center; margin-bottom: 16px; }
-  .routes button {
-    flex: 1; max-width: 170px; font-family: var(--font); cursor: pointer;
-    border: 3px solid transparent; border-radius: 18px; padding: 0 0 8px; overflow: hidden;
-    background: #fff; color: var(--ink); font-size: 17px; font-weight: 800;
-    box-shadow: 0 3px 10px rgba(40,90,110,0.15); transition: transform .12s, border-color .12s;
+  /* ---------- batch 3: route picker cards ---------- */
+  .rgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 0 0 14px; }
+  .rcard {
+    --rc: #2bb3a6; position: relative; min-width: 0; font-family: var(--font); cursor: pointer; text-align: center;
+    border: 3px solid transparent; border-radius: 16px; padding: 0 0 6px; overflow: hidden;
+    background: #fff; color: var(--ink); box-shadow: 0 3px 10px rgba(40,90,110,0.15); transition: transform .12s, border-color .12s;
   }
-  .routes button .pic { display: block; height: 64px; margin-bottom: 6px; }
-  .routes button[data-route="sea"] .pic {
-    background:
-      radial-gradient(circle at 78% 30%, #ffd84d 0 10px, transparent 11px),
-      linear-gradient(180deg, #9fd8f0 0 45%, #4fb1de 45% 70%, #f6dfae 70% 100%);
-  }
-  .routes button[data-route="field"] .pic {
-    background:
-      radial-gradient(circle at 78% 30%, #ffd84d 0 10px, transparent 11px),
-      radial-gradient(ellipse at 25% 62%, #8fd27a 0 30%, transparent 31%),
-      linear-gradient(180deg, #9fd8f0 0 50%, #a3da84 50% 72%, #f2d06b 72% 100%);
-  }
-  .routes button small { display: block; font-size: 11px; font-weight: 600; opacity: .65; margin-top: 2px; }
-  .routes button.active { border-color: var(--teal); transform: translateY(-2px); }
-  .routes button.active[data-route="field"] { border-color: #6dbb4f; }
+  .rcard .pic { display: block; aspect-ratio: 2 / 1; background: var(--rc) center / cover no-repeat; border-bottom: 3px solid var(--rc); }
+  .rcard b { display: block; font-size: 14px; font-weight: 900; margin-top: 4px; white-space: nowrap; }
+  .rcard .rdesc { display: block; font-size: 10px; font-weight: 600; opacity: .6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
+  .rcard .rmeta { display: flex; flex-direction: column; font-size: 10px; font-weight: 700; line-height: 1.35; margin-top: 2px; opacity: .85; }
+  .rcard .rmeta i { font-style: normal; white-space: nowrap; }
+  .rcard .rmeta em { font-style: normal; color: #ff6a3d; font-variant-numeric: tabular-nums; }
+  .rcard.active { border-color: var(--rc); transform: translateY(-2px); box-shadow: 0 6px 14px rgba(40,90,110,0.22); }
+  .rcard.active::after { content: '✓'; position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; border-radius: 50%; background: var(--rc); color: #fff; font-size: 11px; font-weight: 900; line-height: 18px; }
+  .rcard:active { transform: translateY(1px); }
+  .overlay .rcard { border-radius: 16px; font-weight: 800; }
+  #title .card { width: min(560px, 100%); max-height: calc(100% - 4px); overflow: auto; }
+  @media (min-width: 980px) and (min-height: 560px) { #title .card { width: 940px; } #title .rgrid { grid-template-columns: repeat(7, 1fr); } }
+  #routePanel { z-index: 9; }
+  .routecard { width: min(940px, 100%); text-align: left; }
+  .routecard h2 { margin: 0; font-size: 24px; color: #2bb3a6; letter-spacing: 3px; }
+  .routecard .envsub { margin: 6px 0 12px; }
+  #routeClose { padding: 8px 16px; font-size: 15px; background: #fff; color: var(--ink); box-shadow: 0 3px 0 #cfdde3; }
+  @media (min-width: 900px) { .routecard .rgrid { grid-template-columns: repeat(7, 1fr); } }
+  @media (max-width: 520px) { .rgrid { grid-template-columns: repeat(4, 1fr); gap: 6px; } .rcard .rdesc { display: none; } .rcard b { font-size: 12px; letter-spacing: -0.5px; } .rcard, .overlay .rcard { border-radius: 12px; border-width: 2px; } .rcard .rmeta { font-size: 9px; } }
+  @media (max-width: 360px) { .rgrid { grid-template-columns: repeat(3, 1fr); } }
+  .albtabs { display: flex; flex-wrap: wrap; gap: 3px; border-radius: 16px; }
+  .albtabs button { padding: 6px 10px; }
+  .albtabs button small { font-size: 10px; font-weight: 700; opacity: .6; margin-left: 3px; }
+  .albtabs button.full small { color: #ff6a3d; opacity: 1; }
+  .albtabs button.active { background: var(--rc, var(--teal)); color: #fff; }
+  .albtabs button.active small { color: #fff; opacity: .85; }
   #start {
     font-family: var(--font); cursor: pointer; border: 0; border-radius: 999px;
     background: linear-gradient(180deg, #ff8a55, #ff6a3d); color: #fff;
@@ -266,8 +278,7 @@
     .card { padding: 16px 24px 12px; }
     .card h1 { font-size: 48px; }
     .card .sub { margin: 6px 0 10px; }
-    .routes button .pic { height: 48px; }
-    .routes { margin-bottom: 12px; }
+    .rgrid { margin-bottom: 10px; }
     #start { padding: 11px 40px; font-size: 19px; }
     .hint { margin-top: 10px; }
   }
@@ -275,8 +286,12 @@
     .card { padding: 12px 20px 10px; }
     .card h1 { font-size: 38px; }
     .card .sub { margin: 4px 0 8px; font-size: 13px; }
-    .routes button .pic { height: 40px; }
-    .routes { margin-bottom: 10px; }
+    .card .sub, #title .hint, #title .en { display: none; }
+    #title .card { width: min(780px, 100%); }
+    #title .rgrid, .routecard .rgrid { grid-template-columns: repeat(7, 1fr); gap: 6px; margin-bottom: 8px; }
+    .rcard .rdesc { display: none; } .rcard b { font-size: 12px; margin-top: 2px; } .rcard, .overlay .rcard { border-radius: 12px; border-width: 2px; padding-bottom: 4px; }
+    .rcard .pic { aspect-ratio: 2.4 / 1; }
+    .routecard .envsub { display: none; }
     #start { padding: 9px 36px; font-size: 18px; }
     .hint { margin-top: 8px; }
   }
@@ -296,10 +311,7 @@
 </div>
 
 <div id="topright">
-  <div class="segctl play-only" id="segctl">
-    <button data-route="sea" class="active">海边</button>
-    <button data-route="field">田野</button>
-  </div>
+  <button id="routeBtn" class="iconbtn play-only" title="选择路线 (R)" aria-label="选择路线"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4.2 3.6 6.3a1 1 0 0 0-.6.9v12a.8.8 0 0 0 1.1.7L9 18l6 2.2 5.4-2.1a1 1 0 0 0 .6-.9v-12a.8.8 0 0 0-1.1-.7L15 6.4z" opacity=".35"/><path d="M9 4.2v13.8M15 6.4v13.8" stroke="currentColor" stroke-width="1.8" fill="none"/><circle cx="15" cy="10" r="2.6"/></svg><span>路线</span></button>
   <div class="btnrow">
     <button id="pauseBtn" class="iconbtn play-only" title="暂停 / 继续 (P / Esc)">暂停</button>
     <button id="envBtn" class="iconbtn title-only" title="时间与天气" aria-label="时间与天气"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.6"/><path d="M9 1.8v1.6M3.2 8H1.6M4.6 3.6l1.1 1.1M13.4 3.6l-1.1 1.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M8 20.5h9.5a4 4 0 0 0 .4-8 5.5 5.5 0 0 0-10.4 1.2A3.4 3.4 0 0 0 8 20.5z"/></svg><span>环境</span></button>
@@ -340,8 +352,16 @@
   <div class="card albumcard">
     <div class="albhead"><h2>明信片册</h2><button id="albumClose">关闭</button></div>
     <div class="albstats" id="albStats"></div>
-    <div class="segctl albtabs" id="albTabs"><button data-atab="sea">海边</button><button data-atab="field">田野</button></div>
+    <div class="segctl albtabs" id="albTabs"></div>
     <div class="albgrid" id="albGrid"></div>
+  </div>
+</div>
+
+<div id="routePanel" class="overlay hidden">
+  <div class="card routecard">
+    <div class="albhead"><h2>选择路线</h2><button id="routeClose">关闭</button></div>
+    <p class="envsub">七条路线，每条约 900 米，各有 4 个明信片拍照点。选好就出发！</p>
+    <div class="rgrid" id="routeGrid"></div>
   </div>
 </div>
 
@@ -373,13 +393,10 @@
     <h1>鹈鹕骑行</h1>
     <div class="en">PELICAN RIDE</div>
     <p class="sub">蹬上小单车，吹吹风，慢慢骑。</p>
-    <div class="routes" id="routes">
-      <button data-route="sea" class="active"><span class="pic"></span>海边<small>海浪 · 沙滩 · 椰树</small></button>
-      <button data-route="field"><span class="pic"></span>田野<small>麦田 · 篱笆 · 小树</small></button>
-    </div>
+    <div class="rgrid" id="routes" aria-label="选择路线"></div>
     <div class="titlebtns"><button id="start">开始骑行</button><button id="albumBtn">明信片册</button></div>
     <p class="totals" id="totals"></p>
-    <p class="hint">左下摇杆：左右转向　右下滑杆：调节速度<br>键盘：← → / A D 转向，↑ ↓ / W S 调速<br>P / Esc 暂停　B 按铃　C 拍照　M 静音</p>
+    <p class="hint">左下摇杆：左右转向　右下滑杆：调节速度<br>键盘：← → / A D 转向，↑ ↓ / W S 调速<br>P / Esc 暂停　B 按铃　C 拍照　R 路线　M 静音</p>
   </div>
 </div>
 
