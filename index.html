@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#9fd8f0">
+<title>鹈鹕骑行</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --ink: #3d5562;
+    --teal: #2bb3a6;
+    --orange: #ff7a45;
+    --font: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", sans-serif;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; background: #bfe6f5;
+    font-family: var(--font); color: var(--ink);
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    overscroll-behavior: none;
+  }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  .hidden { display: none !important; }
+
+  /* ---------- HUD ---------- */
+  #hud {
+    position: fixed; left: max(10px, env(safe-area-inset-left)); top: max(10px, env(safe-area-inset-top));
+    pointer-events: none;
+    background: rgba(255,255,255,0.78); border-radius: 18px; padding: 8px 14px 9px;
+    box-shadow: 0 4px 14px rgba(40,90,110,0.15); min-width: 118px;
+  }
+  #hud .spd { display: flex; align-items: baseline; gap: 4px; line-height: 1; }
+  #hud .spd b { font-size: 30px; font-weight: 800; color: #ff6a3d; min-width: 1.3em; font-variant-numeric: tabular-nums; }
+  #hud .spd small { font-size: 13px; font-weight: 700; opacity: .7; }
+  #hud .row { font-size: 13px; margin-top: 4px; white-space: nowrap; }
+  #hud .row b { font-variant-numeric: tabular-nums; }
+  #hud .route { display: inline-block; margin-top: 5px; font-size: 12px; font-weight: 700; color: #fff;
+    background: var(--teal); padding: 2px 9px; border-radius: 999px; }
+  #hud .route.field { background: #6dbb4f; }
+
+  #topright {
+    position: fixed; right: max(10px, env(safe-area-inset-right)); top: max(10px, env(safe-area-inset-top));
+    display: flex; gap: 8px; align-items: center; z-index: 6;
+  }
+  .btnrow { display: flex; gap: 8px; align-items: center; }
+  .iconbtn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    height: 40px; min-width: 40px; padding: 0 11px; border: 0; border-radius: 999px; cursor: pointer;
+    background: rgba(255,255,255,0.85); color: var(--ink); box-shadow: 0 4px 14px rgba(40,90,110,0.15);
+    font-family: var(--font); font-size: 14px; font-weight: 800;
+  }
+  .iconbtn svg { width: 19px; height: 19px; fill: currentColor; flex: none; }
+  #muteBtn { padding: 0; width: 40px; }
+  #muteBtn.muted { color: #9aaab3; }
+  #pauseBtn { background: #ff7a45; color: #fff; padding: 0 14px 0 11px; box-shadow: 0 3px 0 #e2582f, 0 6px 14px rgba(255,106,61,0.3); }
+  #pauseBtn.is-paused { background: var(--teal); box-shadow: 0 3px 0 #1d8f84, 0 6px 14px rgba(43,179,166,0.3); }
+  .iconbtn:active { transform: translateY(2px); }
+  body:not(.playing) .play-only { display: none !important; }
+  body.paused #bellBtn, body.paused #segctl { opacity: 0.5; pointer-events: none; }
+
+  #bellBtn {
+    position: fixed; width: 48px; height: 48px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.95);
+    background: rgba(255,216,77,0.92); color: #8a5a32; cursor: pointer; padding: 0;
+    display: flex; align-items: center; justify-content: center; touch-action: none;
+    box-shadow: 0 4px 12px rgba(40,90,110,0.2);
+  }
+  #bellBtn svg { width: 58%; height: 58%; fill: currentColor; }
+  #bellBtn.ring svg { animation: ring .55s ease-out; transform-origin: 50% 15%; }
+  @keyframes ring { 0% { transform: rotate(0); } 20% { transform: rotate(18deg); } 40% { transform: rotate(-15deg); } 60% { transform: rotate(10deg); } 80% { transform: rotate(-5deg); } 100% { transform: rotate(0); } }
+
+  #pause {
+    position: fixed; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: 16px;
+    background: rgba(225,243,250,0.45); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  }
+  #pause .card { width: min(320px, 100%); padding: 22px 24px 16px; }
+  #pause h2 { margin: 0; font-size: 30px; font-weight: 900; color: #2bb3a6; letter-spacing: 4px; }
+  #pause p { margin: 6px 0 16px; font-size: 14px; }
+  #pause .row { display: flex; gap: 12px; justify-content: center; }
+  #pause .row button {
+    font-family: var(--font); cursor: pointer; border: 0; border-radius: 999px; font-size: 18px; font-weight: 900;
+    padding: 11px 24px; letter-spacing: 2px;
+  }
+  #resumeBtn { background: linear-gradient(180deg, #ff8a55, #ff6a3d); color: #fff; box-shadow: 0 4px 0 #e2502a; }
+  #pauseMenuBtn { background: #fff; color: var(--ink); box-shadow: 0 4px 0 #cfdde3; }
+  #pause .hint { margin: 12px 0 0; }
+
+  @media (max-width: 600px) {
+    #topright { flex-direction: column-reverse; align-items: flex-end; gap: 6px; }
+    #title { padding-top: 62px; }
+  }
+  .segctl { display: flex; background: rgba(255,255,255,0.78); border-radius: 999px; padding: 3px;
+    box-shadow: 0 4px 14px rgba(40,90,110,0.15); }
+  .segctl button, #home {
+    font-family: var(--font); border: 0; background: transparent; color: var(--ink);
+    font-size: 14px; font-weight: 700; padding: 7px 13px; border-radius: 999px; cursor: pointer;
+  }
+  .segctl button.active { background: var(--teal); color: #fff; }
+  .segctl button.active[data-route="field"] { background: #6dbb4f; }
+  #home { background: rgba(255,255,255,0.85); box-shadow: 0 4px 14px rgba(40,90,110,0.15); height: 40px; padding: 0 13px; }
+
+  /* ---------- Title ---------- */
+  #title {
+    position: fixed; inset: 0; display: flex; align-items: flex-start; justify-content: center;
+    padding: max(12px, 3vh) 16px 16px; pointer-events: none;
+  }
+  .card {
+    pointer-events: auto; text-align: center;
+    background: rgba(255,255,255,0.82); border-radius: 28px; padding: 22px 26px 18px;
+    box-shadow: 0 10px 40px rgba(40,90,110,0.22); width: min(420px, 100%);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  }
+  .card h1 {
+    margin: 0; font-size: clamp(40px, 11vw, 60px); font-weight: 900; letter-spacing: 6px; line-height: 1.1;
+    color: #ff6a3d; text-shadow: 0 3px 0 #fff, 0 5px 0 rgba(255,140,80,0.35);
+  }
+  .card .en { font-size: 12px; letter-spacing: 3px; color: #7fa3b3; margin-top: 4px; font-weight: 700; }
+  .card .sub { margin: 10px 0 14px; font-size: 15px; }
+  .routes { display: flex; gap: 12px; justify-content: center; margin-bottom: 16px; }
+  .routes button {
+    flex: 1; max-width: 170px; font-family: var(--font); cursor: pointer;
+    border: 3px solid transparent; border-radius: 18px; padding: 0 0 8px; overflow: hidden;
+    background: #fff; color: var(--ink); font-size: 17px; font-weight: 800;
+    box-shadow: 0 3px 10px rgba(40,90,110,0.15); transition: transform .12s, border-color .12s;
+  }
+  .routes button .pic { display: block; height: 64px; margin-bottom: 6px; }
+  .routes button[data-route="sea"] .pic {
+    background:
+      radial-gradient(circle at 78% 30%, #ffd84d 0 10px, transparent 11px),
+      linear-gradient(180deg, #9fd8f0 0 45%, #4fb1de 45% 70%, #f6dfae 70% 100%);
+  }
+  .routes button[data-route="field"] .pic {
+    background:
+      radial-gradient(circle at 78% 30%, #ffd84d 0 10px, transparent 11px),
+      radial-gradient(ellipse at 25% 62%, #8fd27a 0 30%, transparent 31%),
+      linear-gradient(180deg, #9fd8f0 0 50%, #a3da84 50% 72%, #f2d06b 72% 100%);
+  }
+  .routes button small { display: block; font-size: 11px; font-weight: 600; opacity: .65; margin-top: 2px; }
+  .routes button.active { border-color: var(--teal); transform: translateY(-2px); }
+  .routes button.active[data-route="field"] { border-color: #6dbb4f; }
+  #start {
+    font-family: var(--font); cursor: pointer; border: 0; border-radius: 999px;
+    background: linear-gradient(180deg, #ff8a55, #ff6a3d); color: #fff;
+    font-size: 21px; font-weight: 900; letter-spacing: 4px; padding: 13px 42px;
+    box-shadow: 0 5px 0 #e2502a, 0 8px 18px rgba(255,106,61,0.35);
+  }
+  #start:active { transform: translateY(3px); box-shadow: 0 2px 0 #e2502a; }
+  .hint { font-size: 12px; line-height: 1.7; opacity: .75; margin: 14px 0 0; }
+
+  /* ---------- batch 1: HUD extras, photo, toast, results, album ---------- */
+  #hud { width: 172px; }
+  #hud .spd .coins { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 15px; color: #c98a00; }
+  #hud .spd .coins b { font-size: 17px; color: #c98a00; min-width: 0; }
+  .coin { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #fff2b0 0 20%, #ffd451 22% 60%, #f2a900 62%); box-shadow: 0 0 0 1.5px #d99a14 inset; }
+  .prog { margin-top: 7px; }
+  .ptrack { position: relative; height: 8px; border-radius: 99px; background: rgba(61,85,98,0.14); margin: 0 6px 0 2px; }
+  .pfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 99px; background: linear-gradient(90deg, #7cd3c9, #2bb3a6); }
+  .pmk { position: absolute; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px #ff9a6b; }
+  .pmk.got { background: #ffb36b; }
+  .pmk.now { background: #ff7a45; box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px #ff7a45; }
+  .pflag { position: absolute; right: -6px; top: -5px; width: 12px; height: 18px; }
+  .pflag::before { content: ''; position: absolute; left: 1px; top: 0; width: 2px; height: 18px; background: #5b6f7a; border-radius: 1px; }
+  .pflag::after { content: ''; position: absolute; left: 3px; top: 0; width: 10px; height: 8px;
+    background: conic-gradient(#3d5562 0 25%, #fff 0 50%, #3d5562 0 75%, #fff 0) 0 0 / 5px 4px; border: 1px solid #5b6f7a; }
+  .pme { position: absolute; top: 50%; left: 0; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 2.5px #2bb3a6, 0 2px 4px rgba(0,0,0,0.2); }
+  .pme::after { content: ''; position: absolute; left: 7px; top: 4px; border-left: 7px solid #ffb347; border-top: 3px solid transparent; border-bottom: 3px solid transparent; }
+  .pnext { font-size: 11px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .85; }
+  .pnext b { color: #ff6a3d; }
+
+  #photoBtn {
+    position: fixed; height: 44px; padding: 0 16px 0 12px; border: 3px solid #fff; border-radius: 999px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px; font-family: var(--font); font-size: 16px; font-weight: 900; color: #fff;
+    background: linear-gradient(180deg, #ff8a55, #ff6a3d); box-shadow: 0 4px 0 #e2502a, 0 6px 16px rgba(255,106,61,0.35); touch-action: none; z-index: 2;
+  }
+  #photoBtn svg { width: 22px; height: 22px; fill: currentColor; }
+  #photoBtn.pulse { animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { transform: scale(1); box-shadow: 0 4px 0 #e2502a, 0 0 0 0 rgba(255,122,69,0.55); } 50% { transform: scale(1.08); box-shadow: 0 4px 0 #e2502a, 0 0 0 12px rgba(255,122,69,0); } }
+  #toast {
+    position: fixed; left: 50%; top: 24%; transform: translateX(-50%); z-index: 4; pointer-events: none;
+    display: flex; align-items: center; gap: 10px; max-width: min(92vw, 460px);
+    background: rgba(255,255,255,0.92); border-radius: 18px; padding: 9px 16px; font-size: 15px; font-weight: 800;
+    box-shadow: 0 6px 20px rgba(40,90,110,0.2);
+  }
+  #toast.show { animation: toastIn .35s ease-out; }
+  #toast img { width: 84px; height: 52px; object-fit: cover; border-radius: 6px; border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.18); transform: rotate(-4deg); }
+  @keyframes toastIn { from { opacity: 0; transform: translate(-50%, -10px) scale(.95); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+  #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 10; }
+  #flash.on { animation: flash .5s ease-out; }
+  @keyframes flash { 0% { opacity: .95; } 100% { opacity: 0; } }
+
+  .overlay {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 14px; z-index: 7;
+    background: rgba(225,243,250,0.5); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  }
+  .overlay .card { max-height: calc(100% - 8px); overflow: auto; }
+  .overlay button, .titlebtns button { font-family: var(--font); cursor: pointer; border: 0; border-radius: 999px; font-weight: 900; }
+  .rescard { width: min(440px, 100%); }
+  .ribbon { display: inline-block; background: #ff7a45; color: #fff; font-weight: 900;
+    font-size: 16px; letter-spacing: 3px; padding: 6px 22px; border-radius: 999px; box-shadow: 0 4px 0 #e2502a; white-space: nowrap; }
+  .overlay { overflow: visible; }
+  .rescard h2 { margin: 6px 0 4px; font-size: 24px; color: #2bb3a6; }
+  .newrec { display: inline-block; background: #ffd84d; color: #8a5a32; font-weight: 900; font-size: 13px; padding: 3px 12px; border-radius: 999px; transform: rotate(-3deg); }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+  .stats div { background: #f3fafc; border-radius: 14px; padding: 8px 4px; }
+  .stats small { display: block; font-size: 11px; opacity: .7; }
+  .stats b { font-size: 18px; color: #3d5562; font-variant-numeric: tabular-nums; }
+  .thumbs { display: flex; gap: 6px; justify-content: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .thumbs img, .thumbs .miss { width: 76px; height: 48px; border-radius: 6px; object-fit: cover; border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.15); }
+  .thumbs .miss { display: flex; align-items: center; justify-content: center; font-size: 11px; background: #eef4f6; color: #9aaab3; border-style: dashed; border-color: #cfdde3; box-sizing: border-box; }
+  .overlay .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .overlay .row button { padding: 11px 18px; font-size: 16px; background: #fff; color: var(--ink); box-shadow: 0 4px 0 #cfdde3; }
+  .overlay .row button.primary { background: linear-gradient(180deg, #ff8a55, #ff6a3d); color: #fff; box-shadow: 0 4px 0 #e2502a; }
+  #album { z-index: 9; }
+  .albumcard { width: min(760px, 100%); text-align: left; }
+  .albhead { display: flex; align-items: center; justify-content: space-between; }
+  .albhead h2 { margin: 0; font-size: 26px; color: #ff6a3d; letter-spacing: 3px; }
+  #albumClose { padding: 8px 16px; font-size: 15px; background: #fff; color: var(--ink); box-shadow: 0 3px 0 #cfdde3; }
+  .albstats { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; margin: 10px 0; }
+  .albstats b { color: #ff6a3d; }
+  .albtabs { display: inline-flex; margin-bottom: 12px; box-shadow: none; background: #eef6f8; }
+  .albgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .pc { margin: 0; background: #fff; border-radius: 10px; padding: 6px 6px 4px; box-shadow: 0 3px 10px rgba(40,90,110,0.15); }
+  .pc.got { transform: rotate(-1.2deg); } .pc.got:nth-child(even) { transform: rotate(1.4deg); }
+  .pc img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 4px; }
+  .pc .ph { aspect-ratio: 16 / 10; border-radius: 6px; border: 2px dashed #cfdde3; background: #f3f8fa; color: #b4c3ca;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; gap: 2px; }
+  .pc .ph svg { width: 30px; height: 30px; fill: currentColor; }
+  .pc figcaption { display: flex; justify-content: space-between; align-items: baseline; padding: 5px 2px 1px; font-size: 13px; }
+  .pc figcaption small { font-size: 10px; opacity: .6; }
+  @media (max-width: 640px) { .albgrid { grid-template-columns: repeat(2, 1fr); } .thumbs img, .thumbs .miss { width: 66px; height: 42px; } }
+  .titlebtns { display: flex; gap: 10px; justify-content: center; align-items: center; }
+  #albumBtn { padding: 12px 18px; font-size: 16px; background: #fff; color: var(--ink); box-shadow: 0 5px 0 #cfdde3; }
+  .totals { font-size: 12px; margin: 12px 0 0; }
+  .totals b { color: #ff6a3d; }
+  #pause .card { width: min(400px, 100%); }
+  #pause .row button { padding: 11px 16px; font-size: 16px; }
+  #pauseAlbumBtn { background: #fff; color: var(--ink); box-shadow: 0 4px 0 #cfdde3; }
+  body.finished #photoBtn { display: none !important; }
+
+  #fade { position: fixed; inset: 0; background: #eaf7fb; opacity: 0; pointer-events: none; transition: opacity .35s; }
+  #fade.on { opacity: 1; }
+
+  @media (max-height: 820px) and (min-aspect-ratio: 1/1) {
+    .card { padding: 16px 24px 12px; }
+    .card h1 { font-size: 48px; }
+    .card .sub { margin: 6px 0 10px; }
+    .routes button .pic { height: 48px; }
+    .routes { margin-bottom: 12px; }
+    #start { padding: 11px 40px; font-size: 19px; }
+    .hint { margin-top: 10px; }
+  }
+  @media (max-height: 480px) {
+    .card { padding: 12px 20px 10px; }
+    .card h1 { font-size: 38px; }
+    .card .sub { margin: 4px 0 8px; font-size: 13px; }
+    .routes button .pic { height: 40px; }
+    .routes { margin-bottom: 10px; }
+    #start { padding: 9px 36px; font-size: 18px; }
+    .hint { margin-top: 8px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud" class="hidden">
+  <div class="spd"><b id="spd">0</b><small>km/h</small><span class="coins" title="金币"><i class="coin"></i><b id="coins">0</b></span></div>
+  <div class="row">里程 <b id="dist">0 米</b> · <b id="time">0:00</b></div>
+  <div class="route" id="routeName">海边路线</div>
+  <div class="prog">
+    <div class="ptrack"><div class="pfill" id="pfill"></div><div id="pmarks"></div><i class="pflag" title="终点"></i><i class="pme" id="pme"></i></div>
+    <div class="pnext" id="pnext"></div>
+  </div>
+</div>
+
+<div id="topright">
+  <div class="segctl play-only" id="segctl">
+    <button data-route="sea" class="active">海边</button>
+    <button data-route="field">田野</button>
+  </div>
+  <div class="btnrow">
+    <button id="pauseBtn" class="iconbtn play-only" title="暂停 / 继续 (P / Esc)">暂停</button>
+    <button id="muteBtn" class="iconbtn" title="静音 (M)">声音</button>
+    <button id="home" class="play-only" title="返回标题">菜单</button>
+  </div>
+</div>
+
+<button id="bellBtn" class="play-only" title="按铃 (B)" aria-label="车铃"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5a1.5 1.5 0 0 1 1.5 1.5v.6A6.5 6.5 0 0 1 18.5 11v3.6l1.7 2.3a1 1 0 0 1-.8 1.6H4.6a1 1 0 0 1-.8-1.6l1.7-2.3V11a6.5 6.5 0 0 1 5-6.4V4A1.5 1.5 0 0 1 12 2.5z"/><path d="M9.5 19.5h5a2.5 2.5 0 0 1-5 0z"/></svg></button>
+
+<button id="photoBtn" class="play-only hidden" title="拍照 (C)">拍照</button>
+<div id="toast" class="hidden"></div>
+<div id="flash"></div>
+
+<div id="results" class="overlay hidden">
+  <div class="card rescard">
+    <div class="ribbon">到达终点</div>
+    <h2 id="resTitle">海边路线 完成！</h2>
+    <div id="resNew" class="newrec hidden">新纪录！</div>
+    <div class="stats">
+      <div><small>用时</small><b id="resTime">0:00</b></div>
+      <div><small>距离</small><b id="resDist">0 米</b></div>
+      <div><small>平均速度</small><b id="resAvg">0 km/h</b></div>
+      <div><small>明信片</small><b id="resPc">0 / 4</b></div>
+      <div><small>金币</small><b id="resCoins">+0</b></div>
+      <div><small>最佳纪录</small><b id="resBest">—</b></div>
+    </div>
+    <div class="thumbs" id="resThumbs"></div>
+    <div class="row">
+      <button id="againBtn" class="primary">再骑一次</button>
+      <button id="switchBtn">换路线</button>
+      <button id="resMenuBtn">菜单</button>
+    </div>
+  </div>
+</div>
+
+<div id="album" class="overlay hidden">
+  <div class="card albumcard">
+    <div class="albhead"><h2>明信片册</h2><button id="albumClose">关闭</button></div>
+    <div class="albstats" id="albStats"></div>
+    <div class="segctl albtabs" id="albTabs"><button data-atab="sea">海边</button><button data-atab="field">田野</button></div>
+    <div class="albgrid" id="albGrid"></div>
+  </div>
+</div>
+
+<div id="pause" class="hidden">
+  <div class="card">
+    <h2>已暂停</h2>
+    <p>停下来歇一歇，看看风景～</p>
+    <div class="row">
+      <button id="resumeBtn">▶ 继续</button>
+      <button id="pauseAlbumBtn">明信片册</button>
+      <button id="pauseMenuBtn">菜单</button>
+    </div>
+    <p class="hint">按 P / Esc 继续骑行</p>
+  </div>
+</div>
+
+<div id="title">
+  <div class="card">
+    <h1>鹈鹕骑行</h1>
+    <div class="en">PELICAN RIDE</div>
+    <p class="sub">蹬上小单车，吹吹风，慢慢骑。</p>
+    <div class="routes" id="routes">
+      <button data-route="sea" class="active"><span class="pic"></span>海边<small>海浪 · 沙滩 · 椰树</small></button>
+      <button data-route="field"><span class="pic"></span>田野<small>麦田 · 篱笆 · 小树</small></button>
+    </div>
+    <div class="titlebtns"><button id="start">开始骑行</button><button id="albumBtn">明信片册</button></div>
+    <p class="totals" id="totals"></p>
+    <p class="hint">左下摇杆：左右转向　右下滑杆：调节速度<br>键盘：← → / A D 转向，↑ ↓ / W S 调速<br>P / Esc 暂停　B 按铃　C 拍照　M 静音</p>
+  </div>
+</div>
+
+<div id="fade"></div>
+
+<script src="game.js"></script>
+</body>
+</html>
