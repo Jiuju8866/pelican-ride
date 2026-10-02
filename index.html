@@ -5,7 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#9fd8f0">
 <title>鹈鹕骑行</title>
-<link rel="icon" href="data:,">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="鹈鹕骑行">
 <style>
   :root {
     --ink: #3d5562;
@@ -271,6 +276,62 @@
   @media (max-width: 380px) { .envseg button { padding: 6px 7px; font-size: 12px; } }
   @media (max-height: 480px) { .envpick { gap: 5px; margin-bottom: 10px; } #pause .card { padding-top: 14px; padding-bottom: 10px; } #pause h2 { font-size: 24px; } #pause p { margin: 2px 0 8px; } #pause .hint { display: none; } }
 
+
+  /* ---------- batch 4: settings, check-in, cruise, wardrobe, install ---------- */
+  #photoBtn.mini { height: 36px; padding: 0 12px 0 9px; font-size: 13px; border-width: 2px; background: rgba(255,255,255,0.92); color: #ff6a3d; box-shadow: 0 3px 0 #cfdde3, 0 4px 12px rgba(40,90,110,0.18); }
+  #photoBtn.mini svg { width: 17px; height: 17px; }
+  .pmk.now::after { content: '✓'; position: absolute; left: 50%; top: -15px; transform: translateX(-50%); font-size: 10px; font-weight: 900; color: #ff6a3d; }
+  .pc { position: relative; }
+  .pc .stampok { position: absolute; right: 8px; top: 8px; font-style: normal; font-size: 10px; font-weight: 900; color: #ff6a3d; border: 2px solid #ff6a3d; border-radius: 6px; padding: 1px 5px; background: rgba(255,250,240,0.85); transform: rotate(8deg); letter-spacing: 1px; }
+  #cruiseBtn { padding: 0 12px 0 10px; }
+  #cruiseBtn.on { background: var(--teal); color: #fff; box-shadow: 0 3px 0 #1d8f84, 0 6px 14px rgba(43,179,166,0.3); }
+  body.cruise .joyhint { display: none; }
+  .titlebtns { flex-wrap: wrap; }
+  .titlebtns .sm { padding: 12px 16px; font-size: 16px; background: #fff; color: var(--ink); box-shadow: 0 5px 0 #cfdde3; }
+  #installBtn { margin-top: 10px; padding: 7px 14px; font-size: 13px; background: #eef6f8; color: var(--ink); box-shadow: none; font-family: var(--font); border: 0; border-radius: 999px; font-weight: 800; cursor: pointer; }
+  .installhint { font-size: 12px; margin: 8px 0 0; opacity: .8; }
+  #pause .setrowp { margin: -4px 0 14px; }
+  #pauseSettingsBtn { background: #fff; color: var(--ink); box-shadow: 0 4px 0 #cfdde3; }
+  #settingsPanel, #wardrobe { z-index: 10; }
+  .setcard { width: min(520px, 100%); text-align: left; }
+  .setcard h3 { margin: 14px 0 8px; font-size: 15px; color: #2bb3a6; letter-spacing: 2px; }
+  .setlist { display: flex; flex-direction: column; gap: 9px; margin-top: 12px; }
+  .setrow { display: grid; grid-template-columns: 5em auto 1fr; align-items: center; gap: 8px 10px; }
+  .setlab { font-size: 14px; font-weight: 800; }
+  .setnote { grid-column: 2 / -1; font-size: 11px; opacity: .65; margin-top: -4px; }
+  .setrow .segctl { justify-self: start; }
+  .setrow input[type=range] { width: 100%; max-width: 240px; accent-color: #2bb3a6; }
+  .setrow .volv { font-size: 12px; font-variant-numeric: tabular-nums; opacity: .7; }
+  .volrow { grid-template-columns: 5em minmax(120px, 240px) 3em; }
+  .savebtns { justify-content: flex-start !important; }
+  .overlay .row button.danger, button.danger { background: #fff0ec; color: #e2502a; box-shadow: 0 4px 0 #f3c4b4; }
+  #saveText { width: 100%; height: 110px; margin: 10px 0 8px; font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; border: 2px solid #cfdde3; border-radius: 10px; padding: 8px; resize: vertical; color: var(--ink); background: #f8fcfd; user-select: text; -webkit-user-select: text; }
+  #saveMsg { font-size: 12px; margin: 6px 0 0; color: #e2502a; min-height: 1em; }
+  .confirm { margin-top: 10px; padding: 10px 12px; border-radius: 14px; background: #fff4ef; }
+  .confirm p { margin: 0 0 10px; font-size: 13px; font-weight: 700; }
+  #settingsClose, #wardClose { padding: 8px 16px; font-size: 15px; background: #fff; color: var(--ink); box-shadow: 0 3px 0 #cfdde3; }
+  .wardcard { width: min(820px, 100%); text-align: left; }
+  .wardcard .albhead h2 { color: #2bb3a6; }
+  .wcoins { margin-left: auto; margin-right: 12px; display: inline-flex; align-items: center; gap: 5px; font-weight: 900; color: #c98a00; }
+  .wardbody { display: grid; grid-template-columns: minmax(200px, 300px) 1fr; gap: 14px; margin-top: 12px; align-items: start; }
+  #wardPreview { width: 100%; aspect-ratio: 1 / 1; border-radius: 18px; background: #cfeefa; box-shadow: inset 0 0 0 3px #fff; }
+  .wardside .albtabs { margin-bottom: 10px; }
+  .wgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+  .witem { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px 6px; border-radius: 14px !important; background: #fff; color: var(--ink); box-shadow: 0 3px 8px rgba(40,90,110,0.13); border: 3px solid transparent !important; }
+  .witem canvas { width: 56px; height: 56px; }
+  .witem b { font-size: 13px; }
+  .witem small { font-size: 10px; font-weight: 800; opacity: .75; display: inline-flex; align-items: center; gap: 2px; }
+  .witem.sel { border-color: #ffb36b !important; }
+  .witem.on { border-color: var(--teal) !important; }
+  .witem.on::after { content: '✓'; position: absolute; top: 4px; right: 4px; width: 17px; height: 17px; border-radius: 50%; background: var(--teal); color: #fff; font-size: 10px; line-height: 17px; text-align: center; }
+  .witem.locked canvas { opacity: .55; }
+  .witem.locked small { color: #c98a00; opacity: 1; }
+  .witem small svg { width: 11px; height: 11px; fill: currentColor; }
+  .wbar { display: flex; align-items: center; gap: 10px; margin-top: 10px; min-height: 42px; flex-wrap: wrap; }
+  .wbar p { margin: 0; font-size: 13px; font-weight: 700; }
+  #wardBuy { padding: 10px 18px; font-size: 15px; background: linear-gradient(180deg, #ff8a55, #ff6a3d); color: #fff; box-shadow: 0 4px 0 #e2502a; }
+  #wardBuy[disabled] { background: #e3ebee; color: #9aaab3; box-shadow: 0 4px 0 #cfdde3; cursor: default; }
+  @media (max-width: 640px) { .wardbody { grid-template-columns: 1fr; } #wardPreview { max-width: 230px; justify-self: center; } .setrow { grid-template-columns: 4.6em 1fr; } .setrow .segctl { grid-column: 2; } .setnote { grid-column: 1 / -1; } .volrow { grid-template-columns: 4.6em 1fr 2.6em; } .envseg button { padding: 6px 9px; } }
   #fade { position: fixed; inset: 0; background: #eaf7fb; opacity: 0; pointer-events: none; transition: opacity .35s; }
   #fade.on { opacity: 1; }
 
@@ -311,6 +372,7 @@
 </div>
 
 <div id="topright">
+  <button id="cruiseBtn" class="iconbtn play-only" title="巡航模式 (Q)：只调速度，自动转向" aria-label="巡航模式"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a9 9 0 0 0-9 9 1 1 0 0 0 2 0 7 7 0 0 1 14 0 1 1 0 0 0 2 0 9 9 0 0 0-9-9z"/><path d="M12.9 14.3a1.6 1.6 0 1 1-2.2-2.2l4.6-3.5z"/></svg><span>巡航</span></button>
   <button id="routeBtn" class="iconbtn play-only" title="选择路线 (R)" aria-label="选择路线"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4.2 3.6 6.3a1 1 0 0 0-.6.9v12a.8.8 0 0 0 1.1.7L9 18l6 2.2 5.4-2.1a1 1 0 0 0 .6-.9v-12a.8.8 0 0 0-1.1-.7L15 6.4z" opacity=".35"/><path d="M9 4.2v13.8M15 6.4v13.8" stroke="currentColor" stroke-width="1.8" fill="none"/><circle cx="15" cy="10" r="2.6"/></svg><span>路线</span></button>
   <div class="btnrow">
     <button id="pauseBtn" class="iconbtn play-only" title="暂停 / 继续 (P / Esc)">暂停</button>
@@ -379,9 +441,11 @@
     <h2>已暂停</h2>
     <p>停下来歇一歇，看看风景～</p>
     <div class="envpick"></div>
+    <div class="envrow setrowp"><span class="envlab">打卡</span><div class="segctl envseg setseg" data-set="checkin"><button data-v="auto">自动打卡</button><button data-v="manual">手动打卡</button></div></div>
     <div class="row">
       <button id="resumeBtn">▶ 继续</button>
       <button id="pauseAlbumBtn">明信片册</button>
+      <button id="pauseSettingsBtn">设置</button>
       <button id="pauseMenuBtn">菜单</button>
     </div>
     <p class="hint">按 P / Esc 继续骑行</p>
@@ -394,9 +458,52 @@
     <div class="en">PELICAN RIDE</div>
     <p class="sub">蹬上小单车，吹吹风，慢慢骑。</p>
     <div class="rgrid" id="routes" aria-label="选择路线"></div>
-    <div class="titlebtns"><button id="start">开始骑行</button><button id="albumBtn">明信片册</button></div>
+    <div class="titlebtns"><button id="start">开始骑行</button><button id="albumBtn">明信片册</button><button id="wardrobeBtn" class="sm">换装</button><button id="settingsBtn" class="sm">设置</button></div>
     <p class="totals" id="totals"></p>
-    <p class="hint">左下摇杆：左右转向　右下滑杆：调节速度<br>键盘：← → / A D 转向，↑ ↓ / W S 调速<br>P / Esc 暂停　B 按铃　C 拍照　R 路线　M 静音</p>
+    <button id="installBtn" class="hidden">＋ 添加到主屏幕</button>
+    <p class="installhint hidden" id="iosHint">在 Safari 中点「分享」→「添加到主屏幕」，就能像 App 一样离线骑行。</p>
+    <p class="hint">左下摇杆：左右转向　右下滑杆：调节速度<br>键盘：← → / A D 转向，↑ ↓ / W S 调速<br>P / Esc 暂停　B 按铃　C 拍照　Q 巡航　R 路线　M 静音</p>
+  </div>
+</div>
+
+<div id="settingsPanel" class="overlay hidden">
+  <div class="card setcard">
+    <div class="albhead"><h2>设置</h2><button id="settingsClose">关闭</button></div>
+    <div class="setlist">
+      <div class="setrow"><span class="setlab">打卡方式</span><div class="segctl envseg setseg" data-set="checkin"><button data-v="auto">自动打卡</button><button data-v="manual">手动打卡</button></div><small class="setnote" id="checkinNote"></small></div>
+      <div class="setrow"><span class="setlab">转向辅助</span><div class="segctl envseg setseg" data-set="assist"><button data-v="off">关</button><button data-v="light">轻</button><button data-v="strong">强</button></div><small class="setnote">弯道自动帮你压弯；不操作时慢慢回到路中间</small></div>
+      <div class="setrow"><span class="setlab">巡航模式</span><div class="segctl envseg setseg" data-set="cruise"><button data-v="false">关</button><button data-v="true">开</button></div><small class="setnote">只管调速度，鹈鹕自己转向（骑行中按 Q 或点「巡航」切换）</small></div>
+      <div class="setrow"><span class="setlab">震动反馈</span><div class="segctl envseg setseg" data-set="vibrate"><button data-v="true">开</button><button data-v="false">关</button></div><small class="setnote" id="vibNote"></small></div>
+      <div class="setrow volrow"><span class="setlab">音乐</span><input type="range" min="0" max="100" step="5" data-vol="music" aria-label="音乐音量"><b class="volv" data-volv="music"></b></div>
+      <div class="setrow volrow"><span class="setlab">环境音</span><input type="range" min="0" max="100" step="5" data-vol="amb" aria-label="环境音音量"><b class="volv" data-volv="amb"></b></div>
+      <div class="setrow volrow"><span class="setlab">音效</span><input type="range" min="0" max="100" step="5" data-vol="sfx" aria-label="音效音量"><b class="volv" data-volv="sfx"></b></div>
+      <div class="setrow"><span class="setlab">画质</span><div class="segctl envseg setseg" data-set="quality"><button data-v="auto">自动</button><button data-v="high">高</button><button data-v="med">中</button><button data-v="low">低</button></div><small class="setnote" id="qualNote"></small></div>
+    </div>
+    <h3>存档</h3>
+    <div class="row savebtns"><button id="exportBtn">导出存档</button><button id="importBtn">导入存档</button><button id="resetBtn" class="danger">重置存档</button></div>
+    <div id="saveBox" class="hidden">
+      <textarea id="saveText" spellcheck="false" aria-label="存档文本"></textarea>
+      <div class="row savebtns"><button id="saveCopy">复制</button><button id="saveApply" class="primary">导入并重新载入</button><button id="saveCancel">收起</button></div>
+      <p id="saveMsg"></p>
+    </div>
+    <div id="resetConfirm" class="confirm hidden">
+      <p>确定要清空所有明信片、金币、换装和设置吗？此操作无法撤销。</p>
+      <div class="row savebtns"><button id="resetYes" class="danger">确定重置</button><button id="resetNo">取消</button></div>
+    </div>
+  </div>
+</div>
+
+<div id="wardrobe" class="overlay hidden">
+  <div class="card wardcard">
+    <div class="albhead"><h2>换装</h2><span class="wcoins" title="金币"><i class="coin"></i><b id="wCoins">0</b></span><button id="wardClose">关闭</button></div>
+    <div class="wardbody">
+      <canvas id="wardPreview" width="300" height="300" aria-label="换装预览"></canvas>
+      <div class="wardside">
+        <div class="segctl albtabs" id="wardTabs"></div>
+        <div class="wgrid" id="wardGrid"></div>
+        <div class="wbar"><button id="wardBuy" class="hidden">购买</button><p id="wardMsg"></p></div>
+      </div>
+    </div>
   </div>
 </div>
 

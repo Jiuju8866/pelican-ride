@@ -1,4 +1,5 @@
 const { chromium } = require('playwright-core');
+const MANUAL = () => { try { if (!localStorage.getItem('pelicanRide.v2')) localStorage.setItem('pelicanRide.v2', JSON.stringify({ v: 2, settings: { checkin: 'manual' } })); } catch (_) {} };   // batch 4: these older checks use 手动打卡 (photo button / C)
 const OUT = '/workspace/pelican-ride/screenshots';
 const URL = process.argv[2] || 'http://localhost:8765/index.html';
 async function drive(page, ms, bias = 0) {
@@ -20,7 +21,7 @@ async function drive(page, ms, bias = 0) {
     page.on('pageerror', e => errors.push('[pageerror] ' + e.message));
   };
   // ---------- desktop
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 }); await ctx.addInitScript(MANUAL);
   const page = await ctx.newPage(); hook(page);
   await page.goto(URL);
   await page.waitForTimeout(1500);
@@ -55,7 +56,7 @@ async function drive(page, ms, bias = 0) {
   console.log('fps(headless,swiftshader)', fps);
   await ctx.close();
   // ---------- mobile portrait (touch)
-  const m = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+  const m = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true }); await m.addInitScript(MANUAL);
   const mp = await m.newPage(); hook(mp);
   await mp.goto(URL);
   await mp.waitForTimeout(1200);

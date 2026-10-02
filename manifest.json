@@ -1,0 +1,17 @@
+{
+  "name": "鹈鹕骑行 · Pelican Ride",
+  "short_name": "鹈鹕骑行",
+  "description": "骑着小单车的鹈鹕，七条风景路线，收集明信片。完全离线可玩。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#bfe6f5",
+  "theme_color": "#9fd8f0",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

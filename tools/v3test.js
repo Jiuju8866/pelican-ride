@@ -1,5 +1,7 @@
 // Batch-1 verification: journey/finish, postcards + album, pickups, collisions, persistence, layout. Screenshots v3-*.png
 const { chromium } = require('playwright-core');
+const lsPC = (k, id) => { try { const v = JSON.parse(localStorage.getItem('pelicanRide.v2') || 'null'); const p = v && v.postcards && v.postcards[k] && v.postcards[k][id]; return p ? JSON.stringify(p) : null; } catch (_) { return null; } };
+const MANUAL = () => { try { if (!localStorage.getItem('pelicanRide.v2')) localStorage.setItem('pelicanRide.v2', JSON.stringify({ v: 2, settings: { checkin: 'manual' } })); } catch (_) {} };   // batch 4: these older checks use 手动打卡 (photo button / C)
 const OUT = '/workspace/pelican-ride/screenshots';
 const URL = process.argv[2] || 'file:///workspace/pelican-ride/pelican-ride.html';
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) process.exitCode = 1; };
@@ -41,7 +43,7 @@ async function setSpeed(page, frac) {
   const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] });
   const errors = [];
   const hook = p => { p.on('console', m => { if (['error', 'warning'].includes(m.type())) errors.push(`[${m.type()}] ${m.text()}`); }); p.on('pageerror', e => errors.push('[pageerror] ' + e.message)); };
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } }); await ctx.addInitScript(MANUAL);
   const page = await ctx.newPage(); hook(page);
   await page.goto(URL); await sleep(900);
   await page.screenshot({ path: `${OUT}/v3-title.png` });
@@ -77,7 +79,7 @@ async function setSpeed(page, frac) {
   await overlap(page, 'desktop 1280x720 with photo button');
   await page.screenshot({ path: `${OUT}/v3-riding-photo.png` });
   await page.click('#photoBtn', { force: true }); await sleep(500);
-  const pc = await page.evaluate(() => localStorage.getItem('pelicanRide.pc.sea.icecream'));
+  const pc = await page.evaluate(`(${lsPC})('sea', 'icecream')`);
   s = await S(page);
   ok(pc && JSON.parse(pc).img.startsWith('data:image/jpeg') && s.photosThisRide.includes('icecream'), `postcard saved to localStorage (${pc ? Math.round(pc.length / 1024) : 0} KB JPEG dataURL)`);
   await page.screenshot({ path: `${OUT}/v3-photo-taken.png` });
@@ -86,7 +88,7 @@ async function setSpeed(page, frac) {
   // --- second landmark via C key
   await page.evaluate(() => window.__pelican.debug.warpToLandmark(2, 40)); await sleep(700);
   await page.keyboard.press('KeyC'); await sleep(400);
-  ok(!!(await page.evaluate(() => localStorage.getItem('pelicanRide.pc.sea.pier'))), 'C key takes a postcard at 码头');
+  ok(!!(await page.evaluate(`(${lsPC})('sea', 'pier')`)), 'C key takes a postcard at 码头');
 
   // --- pause -> album
   await page.click('#pauseBtn'); await sleep(200);
@@ -148,7 +150,7 @@ async function setSpeed(page, frac) {
   await ctx.close();
 
   // --- mobile portrait / landscape
-  const m = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+  const m = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true }); await m.addInitScript(MANUAL);
   const mp = await m.newPage(); hook(mp);
   await mp.goto(URL); await sleep(900);
   await mp.tap('#start'); await sleep(300);
@@ -162,7 +164,7 @@ async function setSpeed(page, frac) {
   await overlap(mp, 'mobile portrait 390x844 with photo button');
   await mp.screenshot({ path: `${OUT}/v3-mobile-portrait.png` });
   await mp.tap('#photoBtn', { force: true }); await sleep(400);
-  ok(!!(await mp.evaluate(() => localStorage.getItem('pelicanRide.pc.sea.lighthouse'))), 'mobile tap on 拍照 saves postcard');
+  ok(!!(await mp.evaluate(`(${lsPC})('sea', 'lighthouse')`)), 'mobile tap on 拍照 saves postcard');
   await sleep(1500);
   await mp.setViewportSize({ width: 844, height: 390 });
   await mp.evaluate(() => window.__pelican.debug.warpToLandmark(3, 42)); await sleep(900);

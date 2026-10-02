@@ -1,6 +1,7 @@
 // v2 verification: pause/resume, audio graph, mute persistence, layout overlap, screenshots.
 // usage: node v2test.js [url]   (needs playwright-core + /usr/bin/google-chrome)
 const { chromium } = require('playwright-core');
+const MANUAL = () => { try { if (!localStorage.getItem('pelicanRide.v2')) localStorage.setItem('pelicanRide.v2', JSON.stringify({ v: 2, settings: { checkin: 'manual' } })); } catch (_) {} };   // batch 4: these older checks use 手动打卡 (photo button / C)
 const OUT = '/workspace/pelican-ride/screenshots';
 const URL = process.argv[2] || 'file:///workspace/pelican-ride/pelican-ride.html';
 const ok = (cond, msg) => { console.log((cond ? 'PASS ' : 'FAIL ') + msg); if (!cond) process.exitCode = 1; };
@@ -31,7 +32,7 @@ async function overlapCheck(page, label) {
   const hook = p => { p.on('console', m => { if (['error', 'warning'].includes(m.type())) errors.push(`[${m.type()}] ${m.text()}`); }); p.on('pageerror', e => errors.push('[pageerror] ' + e.message)); };
 
   // ---------------- desktop
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } }); await ctx.addInitScript(MANUAL);
   const page = await ctx.newPage(); hook(page);
   await page.goto(URL); await sleep(800);
   let a = await page.evaluate(() => window.__pelican.audio);
@@ -91,7 +92,7 @@ async function overlapCheck(page, label) {
   // mute persistence
   await page.click('#muteBtn'); await sleep(400);
   a = await page.evaluate(() => window.__pelican.audio);
-  const ls = await page.evaluate(() => localStorage.getItem('pelicanRide.muted'));
+  const ls = await page.evaluate(() => String(+JSON.parse(localStorage.getItem('pelicanRide.v2')).muted));
   ok(a.muted && ls === '1' && a.master < 0.05, `mute toggles master to ~0 and saves localStorage (${ls}, gain ${a.master.toFixed(3)})`);
   await page.reload(); await sleep(700);
   const cls = await page.getAttribute('#muteBtn', 'class');
@@ -102,11 +103,11 @@ async function overlapCheck(page, label) {
   ok(a.state === 'running' && a.master < 0.01, `muted session: context runs silently (gain ${a.master.toFixed(3)})`);
   await page.click('#muteBtn'); await sleep(500);
   a = await page.evaluate(() => window.__pelican.audio);
-  ok(!a.muted && a.master > 0.3 && (await page.evaluate(() => localStorage.getItem('pelicanRide.muted'))) === '0', `unmute restores volume (${a.master.toFixed(2)})`);
+  ok(!a.muted && a.master > 0.3 && (await page.evaluate(() => String(+JSON.parse(localStorage.getItem('pelicanRide.v2')).muted))) === '0', `unmute restores volume (${a.master.toFixed(2)})`);
   await ctx.close();
 
   // ---------------- mobile portrait + landscape
-  const m = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+  const m = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true }); await m.addInitScript(MANUAL);
   const mp = await m.newPage(); hook(mp);
   await mp.goto(URL); await sleep(900);
   await mp.screenshot({ path: `${OUT}/v2-mobile-portrait-title.png` });

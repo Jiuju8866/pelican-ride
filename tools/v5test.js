@@ -1,6 +1,7 @@
 // v5 (batch 3) verification: five new routes, route picker, 7-route album, layout, perf. Screenshots v5-*.png
 // usage: node v5test.js [url]   (needs playwright-core + /usr/bin/google-chrome)
 const { chromium } = require('playwright-core');
+const MANUAL = () => { try { if (!localStorage.getItem('pelicanRide.v2')) localStorage.setItem('pelicanRide.v2', JSON.stringify({ v: 2, settings: { checkin: 'manual' } })); } catch (_) {} };   // batch 4: these older checks use 手动打卡 (photo button / C)
 const OUT = '/workspace/pelican-ride/screenshots';
 const URL = process.argv[2] || 'file:///workspace/pelican-ride/pelican-ride.html';
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) process.exitCode = 1; };
@@ -50,7 +51,7 @@ async function gridLayout(page, gridSel, label) {
   const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] });
   const errors = [];
   const hook = p => { p.on('console', m => { if (['error', 'warning'].includes(m.type())) errors.push(`[${m.type()}] ${m.text()}`); }); p.on('pageerror', e => errors.push('[pageerror] ' + e.message)); };
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } }); await ctx.addInitScript(MANUAL);
   const page = await ctx.newPage(); hook(page);
   await page.goto(URL); await sleep(900);
 
@@ -130,7 +131,7 @@ async function gridLayout(page, gridSel, label) {
       await D(page, 'warpToLandmark', i, 40);
       const z = await until(page, `window.__pelican.stats.zone === ${JSON.stringify(lms[i].id)}`, 5000);
       await sleep(250); await page.keyboard.press('KeyC'); await sleep(250);
-      const pc = await page.evaluate(([k, id]) => { const v = JSON.parse(localStorage.getItem(`pelicanRide.pc.${k}.${id}`) || 'null'); return v && v.img && v.img.startsWith('data:image/jpeg') ? v.img.length : 0; }, [k, lms[i].id]);
+      const pc = await page.evaluate(([k, id]) => { const v = ((JSON.parse(localStorage.getItem('pelicanRide.v2') || 'null') || {}).postcards || {})[k]?.[id]; return v && v.img && v.img.startsWith('data:image/jpeg') ? v.img.length : 0; }, [k, lms[i].id]);
       ok(z && pc > 2000, `${k}: postcard「${lms[i].name}」captured (${(pc / 1024).toFixed(0)} KB)`);
       if (k === 'forest' && i === 1) { await sleep(500); await page.screenshot({ path: `${OUT}/v5-forest.png` }); }
     }
@@ -201,7 +202,7 @@ async function gridLayout(page, gridSel, label) {
 
   // ---- layouts: 390x844 portrait, 844x390 landscape
   for (const [w, h, tag] of [[390, 844, 'mobile'], [844, 390, 'landscape']]) {
-    const c2 = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    const c2 = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); await c2.addInitScript(MANUAL);
     const p2 = await c2.newPage(); hook(p2);
     await p2.goto(URL); await sleep(900);
     await gridLayout(p2, '#routes', `title grid ${w}x${h}`);

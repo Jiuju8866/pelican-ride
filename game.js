@@ -33,7 +33,7 @@ let W = 0, H = 0, DPR = 1, S = 1, HY = 0, CAM_H = 1000, PLAYER_Z = 1000, RIDER_S
 const SEG = 200;              // segment length (world units)
 const ROAD_W = 2000;          // half road width
 const RUMBLE = 3;             // segments per colour band
-const DRAW_DIST = 230;        // segments drawn
+let DRAW_DIST = 230;          // segments drawn (lowered by the quality setting)
 const FOV = 100;
 const CAM_DEPTH = 1 / Math.tan((FOV / 2) * Math.PI / 180);
 const MAX_SPEED = SEG * 60 * 0.62;   // world units / s
@@ -42,8 +42,138 @@ const M_PER_UNIT = (KMH_MAX / 3.6) / MAX_SPEED;
 const OFFROAD = 0.92;
 const CENTRIFUGAL = 0.3;
 
+// ============================================================ batch 4: one versioned save (localStorage), migrated from the old keys
+const SAVE_KEY = 'pelicanRide.v2', SAVE_VERSION = 2;
+const OLD_KEYS = { save: 'pelicanRide.save.v1', env: 'pelicanRide.env', muted: 'pelicanRide.muted', pc: 'pelicanRide.pc.' };
+const DEFAULT_SETTINGS = { assist: 'off', cruise: false, vibrate: true, vol: { music: 0.8, amb: 1, sfx: 1 }, quality: 'auto', checkin: 'auto' };
+const DEFAULT_OUTFIT = { bike: 'teal', scarf: 'red', hat: 'none', glasses: 'none', basket: 'none' };
+function freshSave() {
+  return { v: SAVE_VERSION, created: Date.now(), totalDist: 0, coins: 0, best: {}, rides: {}, postcards: {},
+    env: { tod: 'auto', weather: 'auto' }, muted: false, settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
+    outfit: { ...DEFAULT_OUTFIT }, owned: [] };
+}
+// bring any (old or imported) save object up to the current shape; unknown / broken fields fall back to defaults
+function normalizeSave(v) {
+  const d = freshSave();
+  if (!v || typeof v !== 'object') return d;
+  const num = (x, def) => (typeof x === 'number' && isFinite(x) && x >= 0 ? x : def);
+  d.created = num(v.created, d.created);
+  d.totalDist = num(v.totalDist, 0); d.coins = Math.floor(num(v.coins, 0));
+  for (const k of ['best', 'rides']) if (v[k] && typeof v[k] === 'object') for (const r in v[k]) { const n = num(v[k][r], 0); if (n) d[k][r] = n; }
+  if (v.postcards && typeof v.postcards === 'object') for (const r in v.postcards) {
+    const m = v.postcards[r]; if (!m || typeof m !== 'object') continue;
+    for (const id in m) { const pc = m[id]; if (pc && typeof pc.img === 'string' && pc.img.startsWith('data:image/')) (d.postcards[r] || (d.postcards[r] = {}))[id] = { img: pc.img, t: num(pc.t, Date.now()) }; }
+  }
+  if (v.env && typeof v.env === 'object') { if (v.env.tod === 'auto' || [0, 1, 2, 3].includes(v.env.tod)) d.env.tod = v.env.tod; if (['auto', 'clear', 'rain', 'petals'].includes(v.env.weather)) d.env.weather = v.env.weather; }
+  d.muted = !!v.muted;
+  const s = v.settings || {};
+  if (['off', 'light', 'strong'].includes(s.assist)) d.settings.assist = s.assist;
+  d.settings.cruise = !!s.cruise;
+  if (typeof s.vibrate === 'boolean') d.settings.vibrate = s.vibrate;
+  if (s.vol && typeof s.vol === 'object') for (const k of ['music', 'amb', 'sfx']) if (typeof s.vol[k] === 'number') d.settings.vol[k] = clamp(s.vol[k], 0, 1);
+  if (['auto', 'high', 'med', 'low'].includes(s.quality)) d.settings.quality = s.quality;
+  if (['auto', 'manual'].includes(s.checkin)) d.settings.checkin = s.checkin;
+  if (v.outfit && typeof v.outfit === 'object') for (const k in DEFAULT_OUTFIT) if (typeof v.outfit[k] === 'string') d.outfit[k] = v.outfit[k];
+  if (Array.isArray(v.owned)) d.owned = v.owned.filter(x => typeof x === 'string');
+  return d;
+}
+function readOldKeys() {          // the batch 1–3 layout: separate keys for progress, env, mute and every postcard
+  let found = false;
+  const o = {}, get = k => { try { return localStorage.getItem(k); } catch (_) { return null; } };
+  const js = k => { try { return JSON.parse(get(k) || 'null'); } catch (_) { return null; } };
+  const s1 = js(OLD_KEYS.save); if (s1 && typeof s1 === 'object') { found = true; Object.assign(o, s1); }
+  const e = js(OLD_KEYS.env); if (e) { found = true; o.env = e; }
+  const m = get(OLD_KEYS.muted); if (m !== null) { found = true; o.muted = m === '1'; }
+  o.postcards = {};
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i); if (!k || !k.startsWith(OLD_KEYS.pc)) continue;
+      const [r, id] = k.slice(OLD_KEYS.pc.length).split('.'); const pc = js(k);
+      if (r && id && pc) { found = true; (o.postcards[r] || (o.postcards[r] = {}))[id] = pc; }
+    }
+  } catch (_) { /* storage blocked */ }
+  return found ? o : null;
+}
+function clearOldKeys() {
+  try {
+    const kill = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && (k.startsWith(OLD_KEYS.pc) || k === OLD_KEYS.save || k === OLD_KEYS.env || k === OLD_KEYS.muted)) kill.push(k); }
+    kill.forEach(k => localStorage.removeItem(k));
+  } catch (_) { /* ignore */ }
+}
+let saveMigrated = false;
+const save = (() => {
+  let v = null;
+  try { v = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch (_) { v = null; }
+  if (!v) { const old = readOldKeys(); if (old) { v = old; saveMigrated = true; } }
+  const d = normalizeSave(v);
+  if (saveMigrated) { try { localStorage.setItem(SAVE_KEY, JSON.stringify(d)); clearOldKeys(); } catch (_) { /* keep old keys if the new save can't be written */ } }
+  return d;
+})();
+let saveOk = true;
+function persist() {
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); saveOk = true; } catch (_) { saveOk = false; }
+  return saveOk;
+}
+function replaceSave(v) {        // import / reset: swap the whole save in place, then reload the page
+  const d = normalizeSave(v);
+  for (const k of Object.keys(save)) delete save[k];
+  Object.assign(save, d);
+  Object.assign(settings, d.settings); save.settings = settings;
+  clearOldKeys();
+  return persist();
+}
+const settings = save.settings;
+
+// ============================================================ batch 4: graphics quality (manual or automatic, fps-driven)
+// dpr: pixel-ratio cap · dist: segments drawn · minH: smallest sprite drawn (px) · smallN: little props (tufts, flowers)
+// only within this many segments · lit: resolution of the night-window layer · bloom / glow: soft light effects
+// weather / fx / sparks: particle budgets
+const QUALITY = {
+  high: { name: '高', dpr: 2.5, dist: 230, minH: 0.8, smallN: 230, lit: 0.6, erase: 12, bloom: true, glow: true, weather: 1, fx: 1, sparks: 1 },
+  med: { name: '中', dpr: 1.5, dist: 175, minH: 1.4, smallN: 90, lit: 0.45, erase: 18, bloom: true, glow: true, weather: 0.6, fx: 0.7, sparks: 0.7 },
+  low: { name: '低', dpr: 1, dist: 125, minH: 2.4, smallN: 40, lit: 0.33, erase: 30, bloom: false, glow: false, weather: 0.35, fx: 0.45, sparks: 0.45 },
+};
+const QORDER = ['low', 'med', 'high'];
+let qLevel = save.settings.quality === 'auto' ? 'high' : save.settings.quality;
+let Q = QUALITY[qLevel];
+DRAW_DIST = Q.dist;
+const qMon = { frames: 0, time: 0, slow: 0, fast: 0, lastFps: 0, changes: 0, downAt: {}, log: [] };
+function applyQuality(level, why = '') {
+  if (!QUALITY[level]) return;
+  const changed = level !== qLevel;
+  qLevel = level; Q = QUALITY[level]; DRAW_DIST = Q.dist;
+  if (changed) { qMon.changes++; qMon.log.push(`${level}${why ? ':' + why : ''}`); if (W) resize(); }
+  if (typeof syncSettingsUI === 'function') syncSettingsUI();
+}
+// fed from the frame loop: real frame time, only while riding (not paused / hidden)
+function monitorQuality(realDt) {
+  if (save.settings.quality !== 'auto' || state !== 'play' || paused || document.hidden || realDt <= 0 || realDt > 0.5) { qMon.frames = 0; qMon.time = 0; return; }
+  qMon.frames++; qMon.time += realDt;
+  if (qMon.time < 2) return;
+  const fps = qMon.frames / qMon.time; qMon.lastFps = fps; qMon.frames = 0; qMon.time = 0;
+  const i = QORDER.indexOf(qLevel), now = performance.now();
+  qMon.slow = fps < 45 ? qMon.slow + 1 : 0;
+  qMon.fast = fps > 57 ? qMon.fast + 1 : 0;
+  if (qMon.slow >= 2 && i > 0) { qMon.downAt[qLevel] = now; qMon.slow = 0; qMon.fast = 0; applyQuality(QORDER[i - 1], `${fps.toFixed(0)}fps`); }
+  else if (qMon.fast >= 8 && i < 2 && !(now - (qMon.downAt[QORDER[i + 1]] || -1e9) < 90000)) { qMon.fast = 0; applyQuality(QORDER[i + 1], `${fps.toFixed(0)}fps`); }
+}
+function setQualitySetting(v) {
+  save.settings.quality = v; persist();
+  qMon.slow = qMon.fast = 0; qMon.frames = qMon.time = 0;
+  applyQuality(v === 'auto' ? qLevel : v, v === 'auto' ? 'auto' : 'manual');
+}
+
+// ---------------------------------------------------------------- haptics (no-op where unsupported)
+const buzzStats = { calls: 0, last: null };
+let buzzCool = 0;
+function buzz(pattern, kind = '') {
+  if (!save.settings.vibrate || typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return false;
+  try { navigator.vibrate(pattern); buzzStats.calls++; buzzStats.last = kind; return true; } catch (_) { return false; }
+}
+
 function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2.5);
+  DPR = Math.min(window.devicePixelRatio || 1, Q.dpr);
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
   canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
@@ -1239,7 +1369,6 @@ const PHASES = [
   { name: 'night', skyTop: '#0c1634', skyBot: '#2a3a6e', tint: '#0b1433', ta: 0.6, cloudA: '#323f6a', cloudB: '#475482' },
 ].map(p => ({ ...p, skyTop: p.skyTop && hexRGB(p.skyTop), skyBot: p.skyBot && hexRGB(p.skyBot), tint: hexRGB(p.tint), cloudA: hexRGB(p.cloudA), cloudB: hexRGB(p.cloudB) }));
 const RAIN_TINT = hexRGB('#4b5a70');
-const ENV_KEY = 'pelicanRide.env';
 const WEATHERS = ['clear', 'rain', 'petals'];
 const env = {
   todMode: 'auto', weatherMode: 'auto',
@@ -1250,14 +1379,10 @@ const env = {
   skyTop: [0, 0, 0], skyBot: [0, 0, 0], haze: '#e3f3f6', tintC: [255, 255, 255], tintA: 0, rainA: 0,
   cloudA: [0, 0, 0], cloudB: [0, 0, 0], sun: { x: 0, y: 0, vis: 0, r: 1 }, moon: { x: 0, y: 0, vis: 0 }, glow: 0,
 };
-try {
-  const v = JSON.parse(localStorage.getItem(ENV_KEY) || 'null');
-  if (v && (v.tod === 'auto' || [0, 1, 2, 3].includes(v.tod))) env.todMode = v.tod;
-  if (v && (v.weather === 'auto' || WEATHERS.includes(v.weather))) env.weatherMode = v.weather;
-} catch (_) { /* defaults */ }
+env.todMode = save.env.tod; env.weatherMode = save.env.weather;
 if (env.todMode !== 'auto') env.tod = env.todMode + 0.2;
 if (env.weatherMode !== 'auto') { env.weather = env.weatherMode; env.rain = +(env.weather === 'rain'); env.petals = +(env.weather === 'petals'); }
-function saveEnv() { try { localStorage.setItem(ENV_KEY, JSON.stringify({ tod: env.todMode, weather: env.weatherMode })); } catch (_) { /* ignore */ } }
+function saveEnv() { save.env = { tod: env.todMode, weather: env.weatherMode }; persist(); }
 // each route picks its own flavour of weather: snow instead of rain on the mountain, leaves or blossoms for 'petals'
 const weatherLabel = w => (w === 'rain' ? (route.precip === 'snow' ? '小雪' : '小雨') : w === 'petals' ? (route.petal === 'leaves' ? '落叶' : '樱花') : '晴');
 const SNOW_TINT = hexRGB('#dfe7f0');
@@ -1617,7 +1742,6 @@ function renderSegment(seg, t) {
       }
     }
   }
-  if (litOn && litDirty) { litCtx.globalCompositeOperation = 'destination-out'; litCtx.fillRect(0, y2, W, y1 - y2); litCtx.globalCompositeOperation = 'source-over'; }
   if (seg.fog > 0.01) { ctx.globalAlpha = seg.fog; ctx.fillStyle = env.haze; ctx.fillRect(0, y2, W, y1 - y2); ctx.globalAlpha = 1; }
 }
 
@@ -1800,36 +1924,42 @@ function drawScenery3(t, hs) {
 // lit overlays are painted in depth order on their own canvas; nearer things erase what they cover,
 // then the whole layer is laid over the tinted world (so windows stay bright but are still hidden behind trees)
 const litCv = document.createElement('canvas'), litCtx = litCv.getContext('2d');
+let LDPR = 1, bloomTick = 0, bloomStale = true;
 const bloomCv = document.createElement('canvas'), bloomCtx = bloomCv.getContext('2d');
 let litOn = false, litDirty = false, litCount = 0;
 function sizeLit() {
-  litCv.width = canvas.width; litCv.height = canvas.height;
+  LDPR = DPR * Q.lit;
+  litCv.width = Math.max(1, Math.round(W * LDPR)); litCv.height = Math.max(1, Math.round(H * LDPR));
   bloomCv.width = Math.max(1, Math.round(W / 6)); bloomCv.height = Math.max(1, Math.round(H / 6));
 }
 function beginLit() {
+  if (litCv.width !== Math.max(1, Math.round(W * DPR * Q.lit))) sizeLit();
   litOn = env.lightK > 0.03; litDirty = false; litCount = 0;
-  if (!litOn) return;
+  if (!litOn) { bloomStale = true; return; }
   litCtx.setTransform(1, 0, 0, 1, 0, 0); litCtx.globalCompositeOperation = 'source-over'; litCtx.globalAlpha = 1;
   litCtx.clearRect(0, 0, litCv.width, litCv.height);
-  litCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  litCtx.setTransform(LDPR, 0, 0, LDPR, 0, 0);
 }
 function compositeLit() {
   if (!litOn || !litDirty) return;
   const K = clamp(env.lightK * 1.15, 0, 1);
   ctx.globalAlpha = K; ctx.drawImage(litCv, 0, 0, W, H);
-  bloomCtx.setTransform(1, 0, 0, 1, 0, 0); bloomCtx.clearRect(0, 0, bloomCv.width, bloomCv.height);
-  bloomCtx.imageSmoothingQuality = 'medium'; bloomCtx.drawImage(litCv, 0, 0, bloomCv.width, bloomCv.height);
+  if (!Q.bloom) { ctx.globalAlpha = 1; return; }
+  if ((bloomTick = (bloomTick + 1) % 2) === 0 || bloomStale) {     // the soft bloom only needs refreshing every other frame
+    bloomCtx.setTransform(1, 0, 0, 1, 0, 0); bloomCtx.clearRect(0, 0, bloomCv.width, bloomCv.height);
+    bloomCtx.imageSmoothingQuality = 'medium'; bloomCtx.drawImage(litCv, 0, 0, bloomCv.width, bloomCv.height); bloomStale = false;
+  }
   ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = K * 0.6;
   ctx.drawImage(bloomCv, 0, 0, W, H);
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
 }
 function blit(g, img, fr, x, y, w, h, skew, xc, py) {
-  if (skew) { g.setTransform(DPR, 0, -skew * DPR, DPR, xc * DPR, py * DPR); g.drawImage(img, 0, 0, img.width, img.height * fr, -w / 2, -h, w, h * fr); g.setTransform(DPR, 0, 0, DPR, 0, 0); }
+  if (skew) { const d = g === litCtx ? LDPR : DPR; g.setTransform(d, 0, -skew * d, d, xc * d, py * d); g.drawImage(img, 0, 0, img.width, img.height * fr, -w / 2, -h, w, h * fr); g.setTransform(d, 0, 0, d, 0, 0); }
   else g.drawImage(img, 0, 0, img.width, img.height * fr, x, y, w, h * fr);
 }
 
 // ---------------------------------------------------------------- batch 3: fireworks over the night city
-const fw = { shells: [], sparks: [], timer: 3, bursts: 0 };
+const fw = { shells: [], sparks: [], flashes: [], timer: 3, bursts: 0, maxSparks: 0 };
 const FW_COLS = ['#ff6fae', '#ffd84d', '#7cf2ff', '#9cff8a', '#ff8a4c', '#c8a2ff', '#ffffff'];
 function launchFirework() {
   const k = Math.min(W, H) / 720;
@@ -1843,19 +1973,33 @@ function updateFireworks(dt) {
     const s = fw.shells[i]; s.y += s.vy * dt; s.vy *= 1 - dt * 0.6;
     if (s.y <= s.ty || s.vy > -60) {
       fw.shells.splice(i, 1); fw.bursts++; snd.firework();
-      const n = 34, v = (110 + Math.random() * 60) * s.k * 1.6;
-      for (let j = 0; j < n && fw.sparks.length < 160; j++) { const a = j / n * TAU + Math.random() * 0.2, sp = v * (0.75 + Math.random() * 0.35); fw.sparks.push({ x: s.x, y: s.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, age: 0, life: 1.3 + Math.random() * 0.6, c: j % 3 ? s.c : s.c2 }); }
+      // batch 4: bigger, brighter bursts — more sparks, a second inner ring, a glow + a brief flash of the sky
+      const n = Math.round(64 * Q.sparks), v = (150 + Math.random() * 70) * s.k * 1.75, cap = Math.round(340 * Q.sparks);
+      for (let j = 0; j < n && fw.sparks.length < cap; j++) { const a = j / n * TAU + Math.random() * 0.15, sp = v * (0.8 + Math.random() * 0.3); fw.sparks.push({ x: s.x, y: s.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, age: 0, life: 1.6 + Math.random() * 0.8, c: j % 3 ? s.c : s.c2, w: 1 }); }
+      const n2 = Math.round(n * 0.45);
+      for (let j = 0; j < n2 && fw.sparks.length < cap; j++) { const a = j / n2 * TAU + 0.1, sp = v * 0.45; fw.sparks.push({ x: s.x, y: s.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, age: 0, life: 1.1 + Math.random() * 0.4, c: s.c2, w: 0.8 }); }
+      fw.flashes.push({ x: s.x, y: s.y, age: 0, c: s.c, k: s.k });
+      fw.maxSparks = Math.max(fw.maxSparks, fw.sparks.length);
     }
   }
-  for (let i = fw.sparks.length - 1; i >= 0; i--) { const p = fw.sparks[i]; p.age += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 1 - dt * 1.2; p.vy = p.vy * (1 - dt * 1.2) + 60 * dt; if (p.age > p.life) fw.sparks.splice(i, 1); }
+  for (let i = fw.sparks.length - 1; i >= 0; i--) { const p = fw.sparks[i]; p.age += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 1 - dt * 1.1; p.vy = p.vy * (1 - dt * 1.1) + 55 * dt; if (p.age > p.life) fw.sparks.splice(i, 1); }
+  for (let i = fw.flashes.length - 1; i >= 0; i--) { fw.flashes[i].age += dt; if (fw.flashes[i].age > 0.7) fw.flashes.splice(i, 1); }
 }
 function drawFireworks() {
-  if (!fw.shells.length && !fw.sparks.length) return;
+  if (!fw.shells.length && !fw.sparks.length && !fw.flashes.length) return;
   ctx.globalCompositeOperation = 'lighter';
-  for (const s of fw.shells) { ctx.fillStyle = '#fff3c4'; ctx.globalAlpha = 0.9; circ(ctx, s.x, s.y, 2 * s.k + 1); ctx.fill(); ctx.globalAlpha = 0.35; ctx.fillRect(s.x - 0.8, s.y, 1.6, 26 * s.k); }
+  for (const f of fw.flashes) {                 // the sky lights up for a moment around the burst
+    const a = 1 - f.age / 0.7, r = (90 + f.age * 260) * f.k * 1.6;
+    ctx.globalAlpha = a * 0.22; ctx.fillStyle = f.c; ctx.fillRect(0, 0, W, HY);
+    ctx.globalAlpha = a * 0.9; ctx.drawImage(glowCv, f.x - r, f.y - r, r * 2, r * 2);
+  }
+  for (const s of fw.shells) { ctx.fillStyle = '#fff3c4'; ctx.globalAlpha = 0.95; circ(ctx, s.x, s.y, 2.6 * s.k + 1.2); ctx.fill(); ctx.globalAlpha = 0.4; ctx.fillRect(s.x - 1, s.y, 2, 34 * s.k); }
+  ctx.lineCap = 'round';
   for (const p of fw.sparks) {
-    const a = clamp(1 - p.age / p.life, 0, 1); ctx.globalAlpha = a; ctx.strokeStyle = p.c; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 0.06, p.y - p.vy * 0.06); ctx.stroke();
+    const a = clamp(1 - p.age / p.life, 0, 1), k = Math.max(1, Math.min(W, H) / 720);
+    ctx.globalAlpha = Math.min(1, a * 1.25); ctx.strokeStyle = p.c; ctx.lineWidth = (2.2 + 1.6 * a) * k * p.w;
+    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 0.075, p.y - p.vy * 0.075); ctx.stroke();
+    if (a > 0.55) { ctx.globalAlpha = (a - 0.55) * 1.6; ctx.fillStyle = '#fffbe8'; circ(ctx, p.x, p.y, 1.3 * k * p.w); ctx.fill(); }   // hot white tips
   }
   ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
 }
@@ -1936,7 +2080,7 @@ function drawSprite(sp, seg) {
   const s = SPR[nm]; if (!s) return;
   const p = seg.p1.screen;
   const destH = s.worldH * p.scale * S / 2;
-  if (destH < 0.8) return;
+  if (destH < Q.minH) return;
   const destW = destH * s.w / s.h;
   const xc = p.x + p.w * sp.offset;
   const x = xc - destW / 2;
@@ -1951,7 +2095,7 @@ function drawSprite(sp, seg) {
   const k = sw && destH > 6 ? sw * (Math.sin(t * 1.3 + seg.index * 0.7 + sp.offset) + 0.35 * Math.sin(t * 2.9 + seg.index)) * (1 + env.rain * 0.8) : 0;
   blit(ctx, s.img, fr, x, y, destW, destH, k, xc, p.y);
   if (litOn && destH > 2) {          // keep the lit layer in depth order: erase what this sprite hides, add its own windows
-    if (litDirty) { litCtx.globalCompositeOperation = 'destination-out'; litCtx.globalAlpha = 1; blit(litCtx, s.img, fr, x, y, destW, destH, k, xc, p.y); litCtx.globalCompositeOperation = 'source-over'; }
+    if (litDirty && destH > Q.erase) { litCtx.globalCompositeOperation = 'destination-out'; litCtx.globalAlpha = 1; blit(litCtx, s.img, fr, x, y, destW, destH, k, xc, p.y); litCtx.globalCompositeOperation = 'source-over'; }
     const lit = LIT[nm];
     if (lit) { litCtx.globalAlpha = ctx.globalAlpha; blit(litCtx, lit, fr, x, y, destW, destH, k, xc, p.y); litDirty = true; litCount++; }
   }
@@ -2019,6 +2163,8 @@ function renderRoad(t) {
     renderSegment(seg, t);
     maxy = seg.p1.screen.y;
   }
+  // the ground hides the far skyline's windows: one erase for all the road rows (they stack up contiguously)
+  if (litOn && litDirty && maxy < H) { litCtx.globalCompositeOperation = 'destination-out'; litCtx.fillRect(0, maxy, W, H - maxy + 1); litCtx.globalCompositeOperation = 'source-over'; }
   // sprites + fences, back to front (birds following the rider are slotted in at their own depth)
   for (const f of followers) f.si = Math.floor((position + PLAYER_Z + f.dz) / SEG) % N;
   for (let n = DRAW_DIST - 1; n > 0; n--) {
@@ -2030,7 +2176,8 @@ function renderRoad(t) {
     if (seg.fence & 1) drawFence(seg, -1);
     if (seg.fence & 2) drawFence(seg, 1);
     if (seg.bridge) { drawRail(seg, -1); drawRail(seg, 1); }
-    for (const sp of seg.sprites) drawSprite(sp, seg);
+    const farN = n > Q.smallN;
+    for (const sp of seg.sprites) if (!(farN && SMALL_SPRITES.has(sp.name))) drawSprite(sp, seg);
     if (seg.items) for (const it of seg.items) if (!it.taken) drawItem(it, seg);
     if (seg.arch) { ctx.globalAlpha = a; (seg.arch === 'torii' ? drawTorii : seg.arch === 'pylon' ? drawPylon : drawArch)(seg); }
     if (seg.bunting) { ctx.globalAlpha = a; drawBunting(seg); }
@@ -2422,11 +2569,140 @@ function scarfTail(g, bx, by, k, st) {
   g.fillStyle = '#ffd27a'; g.fill();
 }
 
+
+// ============================================================ batch 4: wardrobe (换装) — catalogue + accessory drawing
+const ITEMS = [
+  // bike colours: [main, dark]
+  { id: 'bike:teal', cat: 'bike', name: '青绿', col: ['#25b2a4', '#18897e'], price: 0 },
+  { id: 'bike:coral', cat: 'bike', name: '珊瑚红', col: ['#ff7a6b', '#d9584a'], price: 30 },
+  { id: 'bike:yellow', cat: 'bike', name: '柠檬黄', col: ['#f2c230', '#c99a1c'], price: 30 },
+  { id: 'bike:lilac', cat: 'bike', name: '丁香紫', col: ['#a98be0', '#7f62b8'], price: 50 },
+  { id: 'bike:mint', cat: 'bike', name: '薄荷绿', col: ['#7fd8b0', '#4fae88'], price: 50 },
+  { id: 'bike:black', cat: 'bike', name: '午夜黑', col: ['#3c4650', '#232a31'], price: 80, pc: 8 },
+  { id: 'scarf:red', cat: 'scarf', name: '橙红', col: ['#ff5f3a', '#e0442a'], price: 0 },
+  { id: 'scarf:blue', cat: 'scarf', name: '天蓝', col: ['#4f9ee8', '#2f7cc4'], price: 20 },
+  { id: 'scarf:green', cat: 'scarf', name: '草绿', col: ['#5cc06a', '#3c9a4c'], price: 20 },
+  { id: 'scarf:pink', cat: 'scarf', name: '樱粉', col: ['#ff8fb8', '#e0679a'], price: 30 },
+  { id: 'scarf:gold', cat: 'scarf', name: '金色', col: ['#ffc93a', '#d9a019'], price: 60, pc: 4 },
+  { id: 'hat:none', cat: 'hat', name: '不戴', price: 0 },
+  { id: 'hat:straw', cat: 'hat', name: '草帽', price: 40 },
+  { id: 'hat:beanie', cat: 'hat', name: '毛线帽', price: 40 },
+  { id: 'hat:cap', cat: 'hat', name: '棒球帽', price: 50 },
+  { id: 'hat:wreath', cat: 'hat', name: '花环', price: 60, pc: 4 },
+  { id: 'hat:crown', cat: 'hat', name: '小皇冠', price: 150, pc: 12 },
+  { id: 'glasses:none', cat: 'glasses', name: '不戴', price: 0 },
+  { id: 'glasses:round', cat: 'glasses', name: '圆框墨镜', price: 40 },
+  { id: 'glasses:star', cat: 'glasses', name: '星星眼镜', price: 70, pc: 2 },
+  { id: 'basket:none', cat: 'basket', name: '不放', price: 0 },
+  { id: 'basket:flowers', cat: 'basket', name: '花束', price: 30 },
+  { id: 'basket:baguette', cat: 'basket', name: '法棍', price: 30 },
+  { id: 'basket:melon', cat: 'basket', name: '西瓜', price: 50 },
+  { id: 'basket:kitten', cat: 'basket', name: '小猫', price: 80, pc: 6 },
+];
+const ITEM = Object.fromEntries(ITEMS.map(it => [it.id, it]));
+const WARD_CATS = [['bike', '车身'], ['scarf', '围巾'], ['hat', '帽子'], ['glasses', '眼镜'], ['basket', '车筐']];
+const itemOwned = id => ITEM[id] && (ITEM[id].price === 0 && !ITEM[id].pc || save.owned.includes(id));
+const outfitItem = (o, cat) => ITEM[`${cat}:${o[cat]}`] || ITEM[`${cat}:${DEFAULT_OUTFIT[cat]}`];
+const HAT_COVERS = { straw: 1, beanie: 1, cap: 1 };     // these hide the crest feathers
+function drawHat(g, kind, hx, hy, yaw, t) {
+  if (kind === 'straw') {
+    g.fillStyle = 'rgba(60,40,20,0.18)'; ell(g, hx, hy - 7, 27, 6); g.fill();
+    ell(g, hx, hy - 12, 33, 9); fillStroke(g, '#f2d27a', C.out, 2.2);
+    g.strokeStyle = 'rgba(190,140,60,0.6)'; g.lineWidth = 1.2; ell(g, hx, hy - 12, 26, 6.5); g.stroke();
+    g.beginPath(); g.moveTo(hx - 16, hy - 12); g.bezierCurveTo(hx - 16, hy - 36, hx + 16, hy - 36, hx + 16, hy - 12); g.closePath(); fillStroke(g, '#f6dc8c', C.out, 2.2);
+    g.beginPath(); g.moveTo(hx - 16, hy - 13); g.quadraticCurveTo(hx, hy - 9, hx + 16, hy - 13); g.lineTo(hx + 15.4, hy - 19); g.quadraticCurveTo(hx, hy - 15, hx - 15.4, hy - 19); g.closePath(); g.fillStyle = '#ff6f61'; g.fill();
+  } else if (kind === 'beanie') {
+    g.beginPath(); g.moveTo(hx - 20, hy - 6); g.bezierCurveTo(hx - 21, hy - 40, hx + 21, hy - 40, hx + 20, hy - 6); g.closePath(); fillStroke(g, '#5aa9e6', C.out, 2.2);
+    g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 3;
+    g.beginPath(); g.moveTo(hx - 19, hy - 19); g.quadraticCurveTo(hx, hy - 23, hx + 19, hy - 19); g.stroke();
+    rrect(g, hx - 21, hy - 11, 42, 10, 5); fillStroke(g, '#3f8fd0', C.out, 2);
+    g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = 1.2; for (let k = -16; k <= 16; k += 5) { g.beginPath(); g.moveTo(hx + k, hy - 10); g.lineTo(hx + k, hy - 2); g.stroke(); }
+    circ(g, hx, hy - 36, 7.5); fillStroke(g, '#ffffff', C.out, 2);
+  } else if (kind === 'cap') {
+    const bx = hx + yaw * 20;
+    ell(g, bx, hy - 9, 15 + Math.abs(yaw) * 6, 5, 0); fillStroke(g, '#e8443a', C.out, 2);        // brim, peeking out on the beak side
+    g.beginPath(); g.moveTo(hx - 19, hy - 7); g.bezierCurveTo(hx - 20, hy - 34, hx + 20, hy - 34, hx + 19, hy - 7); g.quadraticCurveTo(hx, hy - 3, hx - 19, hy - 7); g.closePath(); fillStroke(g, '#ff5a4f', C.out, 2.2);
+    g.strokeStyle = 'rgba(120,20,20,0.35)'; g.lineWidth = 1.2; g.beginPath(); g.moveTo(hx, hy - 27); g.lineTo(hx, hy - 6); g.stroke();
+    rrect(g, hx - 6, hy - 11, 12, 5, 2); g.fillStyle = '#fff3dc'; g.fill();     // strap
+    circ(g, hx, hy - 28, 3); fillStroke(g, '#e8443a', C.out, 1.6);
+  } else if (kind === 'wreath') {
+    const cols = ['#ff8fb8', '#ffd84d', '#ffffff', '#b48cf0', '#ff7a6b'];
+    for (let k = 0; k < 12; k++) { const a = k / 12 * TAU; const x = hx + Math.cos(a) * 19, y = hy - 13 + Math.sin(a) * 6; g.fillStyle = '#5cae5a'; ell(g, x, y, 5, 3, a); g.fill(); }
+    for (let k = 0; k < 9; k++) { const a = k / 9 * TAU + 0.3; const x = hx + Math.cos(a) * 19, y = hy - 13 + Math.sin(a) * 6; circ(g, x, y, 3.6); fillStroke(g, cols[k % 5], 'rgba(61,85,98,0.6)', 1); g.fillStyle = '#ffb347'; circ(g, x, y, 1.2); g.fill(); }
+  } else if (kind === 'crown') {
+    const y0 = hy - 14, bob = Math.sin((t || 0) * 3) * 0.6;
+    g.beginPath(); g.moveTo(hx - 14, y0); g.lineTo(hx - 16, y0 - 16 + bob); g.lineTo(hx - 7, y0 - 8); g.lineTo(hx, y0 - 20 + bob); g.lineTo(hx + 7, y0 - 8); g.lineTo(hx + 16, y0 - 16 + bob); g.lineTo(hx + 14, y0); g.closePath();
+    fillStroke(g, '#ffd23f', '#a8720c', 2);
+    g.fillStyle = 'rgba(255,255,255,0.5)'; g.fillRect(hx - 12, y0 - 4, 24, 2);
+    for (const [x, c] of [[-8, '#ff5f7a'], [0, '#4fb1de'], [8, '#5cc06a']]) { circ(g, hx + x, y0 - 3, 2.4); g.fillStyle = c; g.fill(); }
+    for (const x of [-16, 0, 16]) { circ(g, hx + x, y0 - (x ? 16 : 20) + bob, 2.2); g.fillStyle = '#fff6c8'; g.fill(); }
+  }
+}
+function drawGlasses(g, kind, hx, hy, yaw) {
+  const ay = Math.abs(yaw), ey = hy - 1;
+  // the strap / arms wrapping round the back of the head
+  g.strokeStyle = kind === 'star' ? '#ff5fa2' : '#2d3a42'; g.lineWidth = 2.6; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(hx - 18.5, ey); g.quadraticCurveTo(hx, ey + 4, hx + 18.5, ey); g.stroke();
+  if (ay <= 0.25) return;
+  const ex = hx + yaw * 14;
+  if (kind === 'round') {
+    g.strokeStyle = '#2d3a42'; g.lineWidth = 2.2; g.beginPath(); g.moveTo(ex + yaw * 5, ey - 1); g.lineTo(ex + yaw * 10, ey - 2); g.stroke();   // bridge toward the beak
+    ell(g, ex, ey, 5.6 * ay + 3, 6.6); fillStroke(g, '#24313a', '#11181d', 1.8);
+    g.fillStyle = 'rgba(120,200,255,0.35)'; ell(g, ex, ey + 1.5, (5.6 * ay + 3) * 0.7, 3); g.fill();
+    g.fillStyle = 'rgba(255,255,255,0.7)'; ell(g, ex + yaw * 1.5 - 1.5, ey - 2.5, 1.8, 1.3); g.fill();
+  } else {
+    const r = 8.5, cx = ex + yaw * 1;
+    g.beginPath(); for (let k = 0; k < 10; k++) { const a = -Math.PI / 2 + k * Math.PI / 5, rr = k % 2 ? r * 0.48 : r; g.lineTo(cx + Math.cos(a) * rr * (0.55 + 0.45 * ay), ey + Math.sin(a) * rr); } g.closePath();
+    fillStroke(g, '#ff5fa2', '#b8306a', 1.6);
+    g.fillStyle = 'rgba(255,255,255,0.6)'; circ(g, cx - 1.5, ey - 2, 1.3); g.fill();
+  }
+}
+function drawBasket(g, kind, t) {
+  // a little wicker basket on the rear rack, just behind the saddle (closest to the camera)
+  const y0 = -92, h = 20;
+  if (kind === 'flowers') {
+    g.strokeStyle = '#4f9a4c'; g.lineWidth = 2.2;
+    for (const [x, tx] of [[-8, -14], [0, 1], [8, 13]]) { g.beginPath(); g.moveTo(x, y0 + 4); g.quadraticCurveTo(x, y0 - 8, tx, y0 - 14); g.stroke(); }
+    for (const [x, y, c] of [[-14, -14, '#ff8fb8'], [1, -18, '#ffd84d'], [13, -13, '#ff7a6b'], [-6, -9, '#ffffff'], [7, -8, '#b48cf0']]) {
+      for (let k = 0; k < 5; k++) { const a = k / 5 * TAU + t * 0.5; circ(g, x + Math.cos(a) * 3.2, y0 + y + Math.sin(a) * 3.2, 2.6); g.fillStyle = c; g.fill(); }
+      circ(g, x, y0 + y, 2); g.fillStyle = '#ffb347'; g.fill();
+    }
+  } else if (kind === 'baguette') {
+    g.save(); g.translate(2, y0 - 6); g.rotate(-0.55);
+    rrect(g, -24, -5.5, 48, 11, 5.5); fillStroke(g, '#e3a457', C.out, 2);
+    g.strokeStyle = 'rgba(255,240,200,0.9)'; g.lineWidth = 1.6; for (const x of [-14, -4, 6, 16]) { g.beginPath(); g.moveTo(x - 3, 3); g.lineTo(x + 3, -3); g.stroke(); }
+    g.restore();
+  } else if (kind === 'melon') {
+    g.beginPath(); g.arc(0, y0 + 2, 15, Math.PI, 0); g.closePath(); fillStroke(g, '#4caf50', C.out, 2);
+    g.beginPath(); g.arc(0, y0 + 2, 11.5, Math.PI, 0); g.closePath(); g.fillStyle = '#ff5f6d'; g.fill();
+    g.fillStyle = '#2d3a42'; for (const [x, y] of [[-6, -4], [0, -7], [6, -4], [-3, -1], [3, -1]]) { ell(g, x, y0 + 2 + y, 0.9, 1.4); g.fill(); }
+  } else if (kind === 'kitten') {
+    const hy = y0 - 6 + Math.sin(t * 2.2) * 0.8, tl = Math.sin(t * 3) * 4;
+    g.strokeStyle = '#a7b0b8'; g.lineWidth = 4; g.lineCap = 'round'; g.beginPath(); g.moveTo(10, y0 + 2); g.quadraticCurveTo(18, y0 - 6, 16 + tl, y0 - 14); g.stroke();
+    for (const sd of [-1, 1]) { poly(g, [sd * 9, hy - 4, sd * 11, hy - 15, sd * 3, hy - 9]); fillStroke(g, '#c3cbd2', C.out, 1.6); }
+    ell(g, 0, hy, 11, 9); fillStroke(g, '#c3cbd2', C.out, 2);
+    g.fillStyle = '#9aa4ad'; g.fillRect(-2, hy - 9, 1.5, 4); g.fillRect(1, hy - 9, 1.5, 4);
+  }
+  rrect(g, -20, y0, 40, h, 5); fillStroke(g, '#d9a35f', C.out, 2.2);
+  g.strokeStyle = 'rgba(140,90,40,0.55)'; g.lineWidth = 1.3;
+  for (let x = -14; x <= 14; x += 7) { g.beginPath(); g.moveTo(x, y0 + 3); g.lineTo(x, y0 + h - 2); g.stroke(); }
+  g.beginPath(); g.moveTo(-18, y0 + h / 2); g.lineTo(18, y0 + h / 2); g.stroke();
+  rrect(g, -21, y0 - 1, 42, 5, 2.5); fillStroke(g, '#e8b878', C.out, 1.6);
+}
 function drawRider(g, cx, gy, s, st) {
+  const o = st.outfit || save.outfit;
+  const bike = outfitItem(o, 'bike'), scarf = outfitItem(o, 'scarf');
+  const keep = [C.teal, C.tealDark, C.scarf, C.scarfDark];
+  C.teal = bike.col[0]; C.tealDark = bike.col[1]; C.scarf = scarf.col[0]; C.scarfDark = scarf.col[1];
+  try { drawRiderBody(g, cx, gy, s, st, o); } finally { [C.teal, C.tealDark, C.scarf, C.scarfDark] = keep; }
+}
+function drawRiderBody(g, cx, gy, s, st, o) {
   g.save();
   g.translate(cx, gy);
   // ground shadow (not rotated)
-  g.fillStyle = 'rgba(60,90,70,0.22)'; ell(g, 0, 0, 58 * s, 9 * s); g.fill();
+  const hopY = st.hop ? Math.sin((1 - st.hop) * Math.PI) * 26 : 0;   // little happy hop at a check-in
+  g.fillStyle = 'rgba(60,90,70,0.22)'; ell(g, 0, 0, 58 * s * (1 - hopY / 80), 9 * s * (1 - hopY / 80)); g.fill();
+  g.translate(0, -hopY * s);
   g.rotate(st.lean);
   g.scale(s, s);
   const sp = st.speed;
@@ -2497,7 +2773,7 @@ function drawRider(g, cx, gy, s, st) {
   g.fillStyle = C.shade; ell(g, hx - yaw * 5, hy + 9, 12, 6); g.fill();
   // crest feathers
   g.strokeStyle = C.out; g.lineWidth = 2.4;
-  for (const [dx, h, c] of [[-5, 10, -7], [1, 14, 2], [7, 9, 9]]) {
+  if (!HAT_COVERS[o.hat]) for (const [dx, h, c] of [[-5, 10, -7], [1, 14, 2], [7, 9, 9]]) {
     g.beginPath(); g.moveTo(hx + dx, hy - 16); g.quadraticCurveTo(hx + dx + c * 0.3, hy - 16 - h, hx + dx + c, hy - 18 - h); g.stroke();
   }
   // eye + blush on the side the head is turned to
@@ -2514,6 +2790,8 @@ function drawRider(g, cx, gy, s, st) {
     }
     g.fillStyle = 'rgba(255,140,150,0.6)'; ell(g, hx + yaw * 11, hy + 6, 4 * ay, 2.6); g.fill();
   }
+  if (o.glasses && o.glasses !== 'none') drawGlasses(g, o.glasses, hx, hy, yaw);
+  if (o.hat && o.hat !== 'none') drawHat(g, o.hat, hx, hy, yaw, st.t);
 
   // ---------- body
   g.save(); g.translate(0, bob);
@@ -2594,6 +2872,7 @@ function drawRider(g, cx, gy, s, st) {
   fillStroke(g, C.teal, C.out, 2.2);
   g.fillStyle = 'rgba(255,255,255,0.25)'; g.fillRect(-9, wcY - R + 2, 4, R - 12);
   rrect(g, -6, wcY - 26, 12, 9, 3); fillStroke(g, '#ff5a4f', C.out, 1.8);
+  if (o.basket && o.basket !== 'none') drawBasket(g, o.basket, st.t || 0);
   g.restore();
 }
 
@@ -2628,7 +2907,7 @@ function drawControls() {
   circ(g, joy.x + joy.kx, joy.y + joy.ky, kr); fillStroke(g, '#ffffff', 'rgba(43,179,166,0.9)', 3);
   circ(g, joy.x + joy.kx, joy.y + joy.ky, kr * 0.45); g.fillStyle = 'rgba(43,179,166,0.35)'; g.fill();
   g.font = `700 ${Math.round(clamp(joy.r * 0.26, 11, 15))}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'bottom';
-  g.fillStyle = 'rgba(61,85,98,0.85)'; g.fillText('转向', joy.x, joy.y - joy.r - 6);
+  g.fillStyle = settings.cruise ? 'rgba(29,143,132,0.95)' : 'rgba(61,85,98,0.85)'; g.fillText(settings.cruise ? '巡航中' : '转向', joy.x, joy.y - joy.r - 6);
   // slider
   const sw = slider.w, x = slider.x, top = slider.top, bot = slider.bottom;
   g.globalAlpha = slider.id !== null ? 0.95 : 0.8;
@@ -2687,14 +2966,13 @@ canvas.addEventListener('pointercancel', release);
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 // ============================================================ sound (100% Web Audio, generated at runtime)
 const snd = (() => {
-  const LS_KEY = 'pelicanRide.muted';
   let ac = null, master = null, musicBus, ambBus, sfxBus, seaGain, fieldGain, windGain, windFilter, rainGain, nightGain;
   let crickets = 0, drips = 0, rainT = 0, nightT = 0, snowT = 0;
   let noiseBuf, tickBuf;
   let started = false, muted = false, paused = false, hidden = false, nodes = 0, bells = 0, ticks = 0;
   let suspendTimer = 0, musicTimer = 0, eventTimer = 0;
   const VOL = 0.75;
-  try { muted = localStorage.getItem(LS_KEY) === '1'; } catch (_) { /* storage blocked */ }
+  muted = !!save.muted;
 
   const reg = n => { nodes++; return n; };
   const gainNode = (v, to) => { const g = reg(ac.createGain()); g.gain.value = v; if (to) g.connect(to); return g; };
@@ -3074,6 +3352,7 @@ const snd = (() => {
     musicBus = gainNode(0.55, master);
     ambBus = gainNode(0.9, master);
     sfxBus = gainNode(0.9, master);
+    setVolumes(true);
     makeBuffers();
     buildSea(); buildField(); buildWind(); buildRain(); nightGain = gainNode(0, ambBus); buildRoutes3();
     setRoute(route.key, true);
@@ -3130,13 +3409,23 @@ const snd = (() => {
     g.gain.exponentialRampToValueAtTime(0.0005, t0 + 0.11);
     o.connect(g); o.start(t0); o.stop(t0 + 0.13);
   }
+  const BUS_BASE = { music: 0.55, amb: 0.9, sfx: 0.9 };
+  function setVolumes(instant = false) {           // per-bus sliders (设置 → 音乐 / 环境音 / 音效), on top of the master mute
+    if (!ac) return;
+    const v = save.settings.vol, now = ac.currentTime;
+    for (const [k, bus] of [['music', musicBus], ['amb', ambBus], ['sfx', sfxBus]]) {
+      const target = BUS_BASE[k] * clamp(v[k], 0, 1);
+      bus.gain.cancelScheduledValues(now);
+      if (instant) bus.gain.value = target; else bus.gain.setTargetAtTime(target, now, 0.05);
+    }
+  }
   function setMuted(m) {
     muted = !!m;
-    try { localStorage.setItem(LS_KEY, muted ? '1' : '0'); } catch (_) { /* ignore */ }
+    save.muted = muted; persist();
     refresh();
   }
   return {
-    init, refresh, setRoute, update, tick, bell, click, setMuted, chime, boing, shutter, follower, firework,
+    init, refresh, setRoute, update, tick, bell, click, setMuted, setVolumes, chime, boing, shutter, follower, firework,
     fanfare() { jingle([72, 76, 79, 84, 79, 84, 88], 0.12, 0.09); },
     success() { jingle([79, 84, 88], 0.09, 0.07); },
     get muted() { return muted; },
@@ -3147,30 +3436,22 @@ const snd = (() => {
         master: master ? master.gain.value : 0, time: ac ? ac.currentTime : 0, loop: loopN, step,
         rainLevel: rainGain ? rainGain.gain.value : 0, nightLevel: nightGain ? nightGain.gain.value : 0, rainTarget: rainT, nightTarget: nightT, crickets, drips,
         routeBed: curKey, routeLevel: routeGain[curKey] ? routeGain[curKey].gain.value : 0, snowTarget: snowT, snowLevel: snowGain ? snowGain.gain.value : 0,
-        furins, woodpeckers, horns, whooshes, booms };
+        furins, woodpeckers, horns, whooshes, booms,
+        buses: musicBus ? { music: musicBus.gain.value, amb: ambBus.gain.value, sfx: sfxBus.gain.value } : null };
     },
   };
 })();
 
 // ============================================================ save data (localStorage)
-const SAVE_KEY = 'pelicanRide.save.v1';
-const save = (() => {
-  const d = { totalDist: 0, coins: 0, best: {}, rides: {} };
-  try { const v = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); if (v && typeof v === 'object') Object.assign(d, v); } catch (_) { /* fresh save */ }
-  return d;
-})();
+// (the save object itself lives at the top of the file: one versioned key, see SAVE_KEY)
 let saveTimer = 0;
-function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (_) { /* storage full/blocked */ } }
-const pcKey = (r, id) => `pelicanRide.pc.${r}.${id}`;
-const pcCache = {};
-function getPostcard(r, id) {
-  const k = pcKey(r, id);
-  if (!(k in pcCache)) { let v = null; try { v = JSON.parse(localStorage.getItem(k) || 'null'); } catch (_) { v = null; } pcCache[k] = v; }
-  return pcCache[k];
-}
+function getPostcard(r, id) { return (save.postcards[r] && save.postcards[r][id]) || null; }
 function storePostcard(r, id, img) {
-  const k = pcKey(r, id), v = { img, t: Date.now() };
-  try { localStorage.setItem(k, JSON.stringify(v)); pcCache[k] = v; return true; } catch (_) { return false; }
+  const m = save.postcards[r] || (save.postcards[r] = {}), prev = m[id];
+  m[id] = { img, t: Date.now() };
+  if (persist()) return true;
+  if (prev) m[id] = prev; else delete m[id];      // storage full: keep the save consistent
+  persist(); return false;
 }
 const postcardCount = rk => (rk ? [rk] : Object.keys(LANDMARKS)).reduce((n, k) => n + LANDMARKS[k].filter(l => getPostcard(k, l.id)).length, 0);
 const POSTCARD_TOTAL = Object.values(LANDMARKS).reduce((n, a) => n + a.length, 0);
@@ -3187,14 +3468,15 @@ const ui = {
   results: $('results'), album: $('album'), albGrid: $('albGrid'), albStats: $('albStats'), totals: $('totals'),
 };
 let selectedRoute = 'sea';
-const ride = { time: 0, coins: 0, photos: new Set(), lastIdx: 0, zone: null, collisions: 0 };
-const counters = { collisions: 0, photos: 0, pickups: 0 };
+const ride = { time: 0, coins: 0, photos: new Set(), lastIdx: 0, zone: null, zoneFrames: 0, collisions: 0 };
+const counters = { collisions: 0, photos: 0, pickups: 0, autoCheckins: 0, lastCheckin: null };
 function syncRouteButtons() {
   document.querySelectorAll('[data-route]').forEach(b => b.classList.toggle('active', b.dataset.route === route.key));
   ui.routeName.textContent = route.full;
   ui.routeName.style.background = route.color;
   if (typeof syncEnvPickers === 'function' && document.querySelector('.envseg')) syncEnvPickers();
-  petals.length = 0; rainDrops.length = 0; splashes.length = 0; fw.shells.length = 0; fw.sparks.length = 0;
+  petals.length = 0; rainDrops.length = 0; splashes.length = 0; fw.shells.length = 0; fw.sparks.length = 0; fw.flashes.length = 0;
+  if (route.defaultNight && settings.quality === 'auto' && qLevel === 'high') applyQuality('med', 'city');   // the night city is the heaviest scene: start one step down
   if (route.defaultNight && env.todMode === 'auto') env.tod = 3.2;   // the night city starts at night
   env.petals = Math.max(route.basePetals || 0, env.weather === 'petals' && route.petal ? env.petals : 0);   // no stray blossoms on the mountain
 }
@@ -3329,7 +3611,7 @@ function setPaused(p) {
 function toggleMute() { snd.setMuted(!snd.muted); syncMuteBtn(); if (!snd.muted) snd.click(); }
 function goTitle() {
   setPaused(false);
-  closeAlbum(); closeRoutePanel(false);
+  closeAlbum(); closeRoutePanel(false); closeSettings();
   state = 'title';
   document.body.classList.remove('playing', 'finished');
   ui.results.classList.add('hidden');
@@ -3338,7 +3620,7 @@ function goTitle() {
 }
 let bellAnim = 0;
 function ringBell() {
-  snd.bell(); bellAnim = 1;
+  snd.bell(); bellAnim = 1; buzz(15, 'bell');
   ui.bellBtn.classList.remove('ring'); void ui.bellBtn.offsetWidth; ui.bellBtn.classList.add('ring');
 }
 ui.pauseBtn.addEventListener('click', () => { setPaused(!paused); snd.click(!paused); });
@@ -3365,12 +3647,15 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pagehide', () => persist());
 
 window.addEventListener('keydown', e => {
-  if (e.repeat && ['KeyP', 'Escape', 'KeyB', 'KeyC', 'KeyM', 'Enter'].includes(e.code)) return;
+  if (e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') && e.target.type !== 'range') return;
+  if (e.repeat && ['KeyP', 'Escape', 'KeyB', 'KeyC', 'KeyM', 'Enter', 'KeyQ'].includes(e.code)) return;
   keys[e.code] = true;
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
   if (!ui.album.classList.contains('hidden')) { if (e.code === 'Escape') { snd.click(false); closeAlbum(); } return; }
   if (!ui.routePanel.classList.contains('hidden')) { if (e.code === 'Escape') { snd.click(false); closeRoutePanel(); } return; }
   if (!$('envPanel').classList.contains('hidden')) { if (e.code === 'Escape' || e.code === 'Enter') { snd.click(false); closeEnvPanel(); } return; }
+  if (!$('settingsPanel').classList.contains('hidden')) { if (e.code === 'Escape') { snd.click(false); closeSettings(); } return; }
+  if (!$('wardrobe').classList.contains('hidden')) { if (e.code === 'Escape') { snd.click(false); closeWardrobe(); } return; }
   if (e.code === 'KeyM') { toggleMute(); return; }
   if (state === 'title') { if (e.code === 'Enter' || e.code === 'Space') { snd.click(); startGame(); } return; }
   if (state === 'finished') { if (e.code === 'Enter' && !ui.results.classList.contains('hidden')) { snd.click(); startGame(); } return; }
@@ -3379,6 +3664,7 @@ window.addEventListener('keydown', e => {
   else if (e.code === 'KeyB' && !paused) ringBell();
   else if (e.code === 'KeyC' && !paused) takePhoto();
   else if (e.code === 'KeyR' && !paused) { snd.click(); openRoutePanel(); }
+  else if (e.code === 'KeyQ' && !paused) { snd.click(); toggleCruise(); }
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -3398,7 +3684,7 @@ function buildEnvPickers() {
 }
 function syncEnvPickers() {
   const cur = { tod: String(env.todMode), weather: env.weatherMode };
-  document.querySelectorAll('.envseg').forEach(sg => sg.querySelectorAll('button').forEach(b => {
+  document.querySelectorAll('.envseg[data-kind]').forEach(sg => sg.querySelectorAll('button').forEach(b => {
     b.classList.toggle('active', b.dataset.v === cur[sg.dataset.kind]);
     if (b.dataset.v === 'petals') { b.textContent = weatherLabel('petals'); b.hidden = !route.petal; }
     if (b.dataset.v === 'rain') b.textContent = weatherLabel('rain');
@@ -3414,7 +3700,7 @@ function setEnvMode(kind, v) {
   saveEnv(); syncEnvPickers();
 }
 document.addEventListener('click', e => {
-  const b = e.target.closest && e.target.closest('.envseg button'); if (!b) return;
+  const b = e.target.closest && e.target.closest('.envseg[data-kind] button'); if (!b) return;
   snd.click(); setEnvMode(b.closest('.envseg').dataset.kind, b.dataset.v);
 });
 function openEnvPanel() { syncEnvPickers(); $('envPanel').classList.remove('hidden'); }
@@ -3422,6 +3708,216 @@ function closeEnvPanel() { $('envPanel').classList.add('hidden'); }
 $('envBtn').addEventListener('click', () => { snd.click(); openEnvPanel(); });
 $('envClose').addEventListener('click', () => { snd.click(false); closeEnvPanel(); });
 buildEnvPickers();
+
+// ============================================================ batch 4: settings panel (title + pause menu), save tools
+const QUAL_NAMES = { auto: '自动', high: '高', med: '中', low: '低' };
+const vibSupported = typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
+function setSetting(k, v) {
+  if (k === 'checkin' && ['auto', 'manual'].includes(v)) { settings.checkin = v; updatePhotoBtn(); updateProgress(); if (!ui.album.classList.contains('hidden')) renderAlbum(albumTab); }
+  else if (k === 'assist' && ['off', 'light', 'strong'].includes(v)) settings.assist = v;
+  else if (k === 'cruise') settings.cruise = v === true || v === 'true';
+  else if (k === 'vibrate') { settings.vibrate = v === true || v === 'true'; if (settings.vibrate) buzz(25, 'test'); }
+  else if (k === 'quality' && QUALITY[v] || v === 'auto' && k === 'quality') { setQualitySetting(v); }
+  else if (k.startsWith('vol.')) { const c = k.slice(4); if (c in settings.vol) { settings.vol[c] = clamp(+v, 0, 1); snd.setVolumes(); } }
+  else return false;
+  persist(); syncSettingsUI();
+  return true;
+}
+function syncSettingsUI() {
+  const cur = { checkin: settings.checkin, assist: settings.assist, cruise: String(settings.cruise), vibrate: String(settings.vibrate), quality: settings.quality };
+  document.querySelectorAll('.setseg').forEach(sg => sg.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.v === cur[sg.dataset.set])));
+  document.querySelectorAll('[data-vol]').forEach(r => { const v = Math.round(settings.vol[r.dataset.vol] * 100); if (+r.value !== v) r.value = v; });
+  document.querySelectorAll('[data-volv]').forEach(b => { b.textContent = Math.round(settings.vol[b.dataset.volv] * 100) + '%'; });
+  const qn = $('qualNote');
+  if (qn) qn.textContent = `当前：${QUALITY[qLevel].name}` + (qMon.lastFps ? ` · ${Math.round(qMon.lastFps)} fps` : '') + (settings.quality === 'auto' ? ' · 卡顿时自动降低，流畅时再升回' : '');
+  const cn = $('checkinNote');
+  if (cn) cn.textContent = settings.checkin === 'auto' ? '骑到地标附近，取景最好时自动拍照打卡，不用点按钮' : '地标附近会出现跳动的「拍照」按钮，点它或按 C 拍照';
+  const vn = $('vibNote');
+  if (vn) vn.textContent = vibSupported ? '冲出路面、碰撞、按铃、打卡和到达终点时轻轻震动' : '这台设备不支持震动（手机浏览器上才会震）';
+  syncCruiseBtn();
+}
+function syncCruiseBtn() {
+  const b = $('cruiseBtn'); if (!b) return;
+  b.classList.toggle('on', settings.cruise);
+  b.setAttribute('aria-pressed', String(settings.cruise));
+  document.body.classList.toggle('cruise', settings.cruise);
+}
+function toggleCruise() {
+  setSetting('cruise', !settings.cruise);
+  toast(settings.cruise ? '巡航模式：只管调速度，鹈鹕自己转向' : '巡航关闭：自己掌舵', null, 1800);
+}
+let settingsPaused = false;
+function openSettings() {
+  settingsPaused = state === 'play' && !paused;
+  if (settingsPaused) setPaused(true);
+  closeSaveTools();
+  syncSettingsUI();
+  $('settingsPanel').classList.remove('hidden');
+}
+function closeSettings() {
+  if ($('settingsPanel').classList.contains('hidden')) return;
+  $('settingsPanel').classList.add('hidden');
+  if (settingsPaused && state === 'play') setPaused(false);
+  settingsPaused = false;
+}
+function closeSaveTools() { $('saveBox').classList.add('hidden'); $('resetConfirm').classList.add('hidden'); $('saveMsg').textContent = ''; }
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('.setseg button'); if (!b) return;
+  snd.click(); setSetting(b.closest('.setseg').dataset.set, b.dataset.v);
+});
+document.querySelectorAll('[data-vol]').forEach(r => {
+  r.addEventListener('input', () => setSetting('vol.' + r.dataset.vol, r.value / 100));
+  r.addEventListener('change', () => snd.click());
+});
+$('settingsBtn').addEventListener('click', () => { snd.click(); openSettings(); });
+$('pauseSettingsBtn').addEventListener('click', () => { snd.click(); settingsPaused = false; openSettings(); });
+$('settingsClose').addEventListener('click', () => { snd.click(false); closeSettings(); });
+$('cruiseBtn').addEventListener('click', () => { snd.click(); toggleCruise(); });
+// save export / import / reset
+function exportSaveText() { persist(); return JSON.stringify({ game: 'pelican-ride', ...save }); }
+function importSaveText(txt) {
+  let v; try { v = JSON.parse(txt); } catch (_) { return { ok: false, msg: '不是有效的存档文本（JSON 解析失败）' }; }
+  if (!v || typeof v !== 'object' || (v.game && v.game !== 'pelican-ride') || !('v' in v || 'postcards' in v || 'totalDist' in v)) return { ok: false, msg: '这看起来不是鹈鹕骑行的存档' };
+  const ok = replaceSave(v);
+  return ok ? { ok: true, msg: '已导入' } : { ok: false, msg: '存储空间不足，导入失败' };
+}
+$('exportBtn').addEventListener('click', () => {
+  snd.click(); $('resetConfirm').classList.add('hidden');
+  $('saveBox').classList.remove('hidden'); $('saveApply').classList.add('hidden'); $('saveCopy').classList.remove('hidden');
+  const ta = $('saveText'); ta.value = exportSaveText(); ta.readOnly = true; ta.focus(); ta.select();
+  $('saveMsg').textContent = `存档大小约 ${Math.ceil(ta.value.length / 1024)} KB，复制后保存好，换设备时导入即可。`;
+});
+$('importBtn').addEventListener('click', () => {
+  snd.click(); $('resetConfirm').classList.add('hidden');
+  $('saveBox').classList.remove('hidden'); $('saveApply').classList.remove('hidden'); $('saveCopy').classList.add('hidden');
+  const ta = $('saveText'); ta.readOnly = false; ta.value = ''; ta.placeholder = '把导出的存档文本粘贴到这里'; ta.focus();
+  $('saveMsg').textContent = '导入会覆盖当前存档。';
+});
+$('saveCopy').addEventListener('click', () => {
+  const ta = $('saveText'); ta.select();
+  const done = () => { $('saveMsg').textContent = '已复制到剪贴板 ✓'; };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(ta.value).then(done, () => { try { document.execCommand('copy'); done(); } catch (_) {} });
+  else { try { document.execCommand('copy'); done(); } catch (_) {} }
+});
+$('saveApply').addEventListener('click', () => {
+  const r = importSaveText($('saveText').value);
+  $('saveMsg').textContent = r.msg;
+  if (r.ok) { snd.success(); setTimeout(() => location.reload(), 400); }
+});
+$('saveCancel').addEventListener('click', () => { snd.click(false); closeSaveTools(); });
+$('resetBtn').addEventListener('click', () => { snd.click(); $('saveBox').classList.add('hidden'); $('resetConfirm').classList.remove('hidden'); });
+$('resetNo').addEventListener('click', () => { snd.click(false); $('resetConfirm').classList.add('hidden'); });
+$('resetYes').addEventListener('click', () => { replaceSave(freshSave()); setTimeout(() => location.reload(), 150); });
+
+// ============================================================ batch 4: wardrobe screen
+let wardCat = 'bike', wardSel = null, wardAnim = 0;
+const ICON_LOCK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2h.5A1.5 1.5 0 0 1 19 11.5v8a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5v-8A1.5 1.5 0 0 1 6.5 10zm2 0h6V8a3 3 0 0 0-6 0z"/></svg>';
+function itemLockReason(it) {
+  if (itemOwned(it.id)) return '';
+  const need = it.pc || 0, have = postcardCount();
+  if (have < need) return `需要 ${need} 张明信片（已有 ${have}）`;
+  if (save.coins < it.price) return `金币不够（还差 ${it.price - save.coins}）`;
+  return '';
+}
+function drawItemIcon(c, it) {
+  const g = c.getContext('2d'), k = c.width / 56;
+  g.setTransform(k, 0, 0, k, 0, 0); g.clearRect(0, 0, 56, 56);
+  if (it.col) { circ(g, 28, 28, 19); fillStroke(g, it.col[0], it.col[1], 5); g.fillStyle = 'rgba(255,255,255,0.35)'; ell(g, 22, 21, 6, 4, -0.5); g.fill(); return; }
+  const kind = it.id.split(':')[1];
+  if (kind === 'none') { g.strokeStyle = '#cfdde3'; g.lineWidth = 3; circ(g, 28, 28, 16); g.stroke(); g.beginPath(); g.moveTo(17, 39); g.lineTo(39, 17); g.stroke(); return; }
+  if (it.cat === 'hat') { g.save(); g.translate(28, 37); g.scale(0.85, 0.85); circ(g, 0, 0, 19); fillStroke(g, '#fff', C.out, 2.4); drawHat(g, kind, 0, 0, 0.6, 0); g.restore(); }
+  else if (it.cat === 'glasses') { g.save(); g.translate(28, 32); g.scale(1.25, 1.25); circ(g, 0, 0, 19); fillStroke(g, '#fff', C.out, 2.4); drawGlasses(g, kind, 0, 4, 0.75); g.restore(); }
+  else if (it.cat === 'basket') { g.save(); g.translate(28, 140 * 0 + 50); g.scale(0.95, 0.95); g.translate(0, 70); drawBasket(g, kind, 0); g.restore(); }
+}
+function renderWardrobe() {
+  $('wCoins').textContent = save.coins;
+  $('wardTabs').innerHTML = WARD_CATS.map(([k, l]) => `<button data-wcat="${k}" class="${k === wardCat ? 'active' : ''}">${l}</button>`).join('');
+  const list = ITEMS.filter(it => it.cat === wardCat);
+  $('wardGrid').innerHTML = list.map(it => {
+    const own = itemOwned(it.id), on = save.outfit[it.cat] === it.id.split(':')[1];
+    const tag = on ? '穿戴中' : own ? '已拥有' : `${ICON_LOCK}${it.price ? it.price + ' 金币' : ''}${it.pc ? (it.price ? ' · ' : '') + it.pc + ' 张明信片' : ''}`;
+    return `<button class="witem${own ? '' : ' locked'}${on ? ' on' : ''}${wardSel === it.id ? ' sel' : ''}" data-item="${it.id}"><canvas width="112" height="112"></canvas><b>${it.name}</b><small>${tag}</small></button>`;
+  }).join('');
+  $('wardGrid').querySelectorAll('.witem').forEach(b => drawItemIcon(b.querySelector('canvas'), ITEM[b.dataset.item]));
+  const it = wardSel && ITEM[wardSel], buy = $('wardBuy'), msg = $('wardMsg');
+  if (it && !itemOwned(it.id)) {
+    const why = itemLockReason(it);
+    buy.classList.remove('hidden'); buy.disabled = !!why;
+    buy.textContent = `购买「${it.name}」 · ${it.price} 金币`;
+    msg.textContent = why || '试穿中 · 买下就能穿着骑行，也会出现在明信片上';
+  } else { buy.classList.add('hidden'); msg.textContent = it ? `已换上「${it.name}」` : '点选物品试穿；解锁需要金币，部分还需要收集明信片。'; }
+}
+function previewOutfit() {
+  const o = { ...save.outfit };
+  if (wardSel && ITEM[wardSel]) o[ITEM[wardSel].cat] = wardSel.split(':')[1];
+  return o;
+}
+function drawWardPreview(now) {
+  const c = $('wardPreview'), g = c.getContext('2d'), w = c.width, h = c.height, tt = now / 1000;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  const sky = g.createLinearGradient(0, 0, 0, h); sky.addColorStop(0, '#9fdcf3'); sky.addColorStop(0.62, '#e3f6fb'); sky.addColorStop(0.62, '#a9db8f'); sky.addColorStop(1, '#86c870');
+  g.fillStyle = sky; g.fillRect(0, 0, w, h);
+  g.fillStyle = '#ffd84d'; circ(g, w * 0.82, h * 0.16, w * 0.06); g.fill();
+  g.fillStyle = '#d9c7a8'; poly(g, [w * 0.44, h * 0.62, w * 0.56, h * 0.62, w * 0.86, h, w * 0.14, h]); g.fill();
+  const yawP = Math.sin(tt * 0.9) > 0 ? 0.62 : -0.62;
+  wardAnim = approach(wardAnim, yawP, 3, 1 / 60);
+  drawRider(g, w / 2, h * 0.93, w / 330, { crank: tt * 3, wheel: tt * 6, lean: Math.sin(tt * 1.3) * 0.03, steer: 0, yaw: wardAnim, speed: 0.25, t: tt, shake: 0, blink: (tt % 3.2) < 0.12 ? 1 : 0, puff: 0, spread: 0, happy: 0, hop: 0, outfit: previewOutfit() });
+}
+let wardRaf = 0;
+function wardLoop(now) { if ($('wardrobe').classList.contains('hidden')) { wardRaf = 0; return; } drawWardPreview(now); wardRaf = requestAnimationFrame(wardLoop); }
+function openWardrobe() {
+  wardSel = null; renderWardrobe();
+  $('wardrobe').classList.remove('hidden');
+  if (!wardRaf) wardRaf = requestAnimationFrame(wardLoop);
+}
+function closeWardrobe() { $('wardrobe').classList.add('hidden'); wardSel = null; updateTotals(); }
+function equipItem(id) {
+  const it = ITEM[id]; if (!it || !itemOwned(id)) return false;
+  save.outfit[it.cat] = id.split(':')[1]; persist(); return true;
+}
+function buyItem(id) {
+  const it = ITEM[id]; if (!it || itemOwned(id) || itemLockReason(it)) return false;
+  save.coins -= it.price; save.owned.push(id); equipItem(id); persist();
+  snd.success(); return true;
+}
+$('wardTabs').addEventListener('click', e => { const b = e.target.closest('[data-wcat]'); if (!b) return; snd.click(); wardCat = b.dataset.wcat; wardSel = null; renderWardrobe(); });
+$('wardGrid').addEventListener('click', e => {
+  const b = e.target.closest('[data-item]'); if (!b) return; snd.click();
+  const id = b.dataset.item; wardSel = id;
+  if (itemOwned(id)) equipItem(id);
+  renderWardrobe();
+});
+$('wardBuy').addEventListener('click', () => { if (wardSel && buyItem(wardSel)) { toast(`解锁了「${ITEM[wardSel].name}」！`, null, 1800); renderWardrobe(); } });
+$('wardrobeBtn').addEventListener('click', () => { snd.click(); openWardrobe(); });
+$('wardClose').addEventListener('click', () => { snd.click(false); closeWardrobe(); });
+
+// ============================================================ batch 4: PWA (service worker + 添加到主屏幕)
+const SINGLE_FILE = !!window.__PELICAN_SINGLE_FILE__;
+const pwa = { sw: 'none', installable: false, error: null };
+if (!SINGLE_FILE && 'serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  pwa.sw = 'registering';
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').then(reg => { pwa.sw = 'registered'; pwa.scope = reg.scope; })
+      .catch(err => { pwa.sw = 'failed'; pwa.error = String(err && err.message || err); });
+  });
+}
+let deferredInstall = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); deferredInstall = e; pwa.installable = true;
+  $('installBtn').classList.remove('hidden');
+});
+window.addEventListener('appinstalled', () => { deferredInstall = null; $('installBtn').classList.add('hidden'); toast('已添加到主屏幕 ✓'); });
+$('installBtn').addEventListener('click', () => {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  deferredInstall.userChoice.finally(() => { deferredInstall = null; $('installBtn').classList.add('hidden'); });
+});
+(() => {   // iOS Safari has no install prompt: show a one-line hint instead (only when served, not yet standalone)
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (ios && !standalone && !SINGLE_FILE && /^https?:$/.test(location.protocol)) $('iosHint').classList.remove('hidden');
+})();
+syncSettingsUI();
 
 // ---------------------------------------------------------------- toast / flash
 let toastTimer = 0;
@@ -3443,7 +3939,7 @@ function updateProgress() {
   ui.pfill.style.width = `${f * 100}%`; ui.pme.style.left = `${f * 100}%`;
   const next = LANDMARKS[route.key].find(lm => lmIndex(lm) + ZONE_AFTER > idx);
   const m = i => Math.max(0, (i - idx) * SEG * M_PER_UNIT);
-  if (ride.zone) ui.pnext.innerHTML = `<b>${ride.zone.name}</b> · 拍张明信片吧`;
+  if (ride.zone) ui.pnext.innerHTML = `<b>${ride.zone.name}</b> · ` + (ride.photos.has(ride.zone.id) ? '已打卡 ✓' : settings.checkin === 'auto' ? '自动打卡中…' : '拍张明信片吧');
   else if (next) ui.pnext.innerHTML = `下一站 <b>${next.name}</b> · ${Math.round(m(lmIndex(next)))} 米`;
   else ui.pnext.innerHTML = `<b>终点</b> · ${Math.round(m(JOURNEY))} 米`;
 }
@@ -3451,23 +3947,58 @@ function updateProgress() {
 // ---------------------------------------------------------------- photo spots & postcards
 function updatePhotoBtn() {
   const lm = state === 'play' ? ride.zone : null;
-  ui.photoBtn.classList.toggle('hidden', !lm);
+  const auto = settings.checkin === 'auto', done = !!(lm && ride.photos.has(lm.id));
+  // auto mode: no required button — only a small optional 「再拍」 after the automatic check-in
+  ui.photoBtn.classList.toggle('hidden', !lm || (auto && !done));
+  ui.photoBtn.classList.toggle('mini', auto);
   if (lm) {
     const have = !!getPostcard(route.key, lm.id);
-    ui.photoBtn.classList.toggle('pulse', !ride.photos.has(lm.id));
-    ui.photoBtn.querySelector('span').textContent = ride.photos.has(lm.id) || have ? '再拍一张' : '拍照';
+    ui.photoBtn.classList.toggle('pulse', !auto && !done);
+    ui.photoBtn.querySelector('span').textContent = auto ? '再拍' : (done || have ? '再拍一张' : '拍照');
+    ui.photoBtn.title = auto ? '再拍一张 (C)' : '拍照 (C)';
   }
 }
 function checkZone(idx) {
   const lm = LANDMARKS[route.key].find(l => idx >= lmIndex(l) - ZONE_BEFORE && idx <= lmIndex(l) + ZONE_AFTER) || null;
-  if (lm === ride.zone) return;
-  ride.zone = lm;
-  updatePhotoBtn();
-  if (lm) {
-    toast(`「${lm.name}」到啦 · 拍张明信片吧`);
-    snd.success();
-    if (Math.random() < 0.7) spawnFollowers(1 + Math.floor(Math.random() * 2));
+  if (lm !== ride.zone) {
+    ride.zone = lm; ride.zoneFrames = 0;
+    updatePhotoBtn();
+    if (lm) {
+      toast(settings.checkin === 'auto' ? `前方「${lm.name}」· 准备自动打卡` : `「${lm.name}」到啦 · 拍张明信片吧`);
+      snd.success();
+      if (Math.random() < 0.7) spawnFollowers(1 + Math.floor(Math.random() * 2));
+    }
   }
+  if (!lm) return;
+  ride.zoneFrames++;
+  // 自动打卡: shoot at the best framing point — the landmark big in frame but not yet sliding off screen
+  if (settings.checkin === 'auto' && !ride.photos.has(lm.id) && ride.zoneFrames > 3) {
+    const why = framingReady(lm, idx);
+    if (why) autoCheckin(lm, why);
+  }
+}
+// on-screen box of the landmark's main prop (CSS px), from the latest projection
+function landmarkBox(lm) {
+  let seg = segments[lmIndex(lm)], main = seg && seg.sprites.find(sp => sp.name === LM_SPRITE[lm.id]);
+  if (!main) {                         // no named prop: frame the biggest thing near the landmark
+    let bestH = 0;
+    for (let i = lmIndex(lm) - 3; i <= lmIndex(lm) + 3; i++) { const sg = segments[i]; if (sg) for (const sp of sg.sprites) { const s = SPR[sp.name]; if (s && s.worldH > bestH) { bestH = s.worldH; main = sp; seg = sg; } } }
+  }
+  if (!main || !SPR[main.name] || !seg.vis || seg.p1.camera.z <= CAM_DEPTH) return null;
+  const p = seg.p1.screen, spr = SPR[main.name], dh = spr.worldH * p.scale * S / 2, dw = dh * spr.w / spr.h;
+  const cx = p.x + p.w * main.offset;
+  return { x0: cx - dw / 2, x1: cx + dw / 2, y0: p.y - dh, y1: p.y, dw, dh, cx };
+}
+const FRAME_AT = { sakuratunnel: 24 };       // the blossom tunnel reads best as a long view, not one tree up close
+function framingReady(lm, idx) {
+  const b = landmarkBox(lm);
+  if (idx >= lmIndex(lm) + ZONE_AFTER - 1) return 'zone-end';             // last chance before it passes
+  if (FRAME_AT[lm.id] && lmIndex(lm) - idx <= FRAME_AT[lm.id]) return 'vista';   // scenes better shot from a little way back
+  if (!b) return null;
+  if (b.dh >= H * 0.55) return 'fills';                                     // big and proud
+  if (b.y0 <= H * 0.06 && b.dh >= H * 0.2) return 'top';                    // tall thing about to leave the top
+  if ((b.x0 < W * 0.03 || b.x1 > W * 0.97) && b.dh >= H * 0.1) return 'edge'; // about to slide off the side: biggest it gets while whole
+  return null;
 }
 function makePostcardImage(lm) {
   const PW = 320, PH = 200, B = 8, CAP = 24;
@@ -3476,27 +4007,27 @@ function makePostcardImage(lm) {
   g.fillStyle = '#fffaf0'; g.fillRect(0, 0, PW, PH);
   const iw = PW - 2 * B, ih = PH - 2 * B - CAP, ar = iw / ih;
   const cw = canvas.width, ch = canvas.height;
-  // frame = union of rider box and landmark box (CSS px), padded, fitted to the postcard aspect
-  let x0 = W / 2 - 80 * RIDER_S, x1 = W / 2 + 80 * RIDER_S, y0 = RIDER_Y - 285 * RIDER_S, y1 = RIDER_Y + 6;
-  let seg = segments[lmIndex(lm)], main = seg && seg.sprites.find(sp => sp.name === LM_SPRITE[lm.id]);
-  if (!main) {                         // no named prop: frame the biggest thing near the landmark
-    let bestH = 0;
-    for (let i = lmIndex(lm) - 3; i <= lmIndex(lm) + 3; i++) { const sg = segments[i]; if (sg) for (const sp of sg.sprites) { const s = SPR[sp.name]; if (s && s.worldH > bestH) { bestH = s.worldH; main = sp; seg = sg; } } }
+  // frame = union of the rider's upper body and the landmark box (CSS px), padded, fitted to the postcard aspect
+  // (with a landmark in view only the pelican's head & shoulders are required, so a far-off-to-the-side landmark still fills the card)
+  let x0 = W / 2 - 70 * RIDER_S, x1 = W / 2 + 70 * RIDER_S, y0 = RIDER_Y - 285 * RIDER_S, y1 = RIDER_Y - 40 * RIDER_S;
+  const b = landmarkBox(lm);
+  let big = false;
+  if (b) {
+    big = b.dh > H * 0.3;
+    y1 = RIDER_Y - 130 * RIDER_S;
+    x0 = Math.min(W / 2 - 45 * RIDER_S, b.cx - b.dw * 0.58); x1 = Math.max(W / 2 + 45 * RIDER_S, b.cx + b.dw * 0.58);
+    y0 = Math.min(y0, b.y0 - b.dh * 0.06); y1 = Math.max(y1, Math.min(b.y1 + b.dh * 0.04, RIDER_Y));
   }
-  if (main && SPR[main.name] && seg.vis && seg.p1.camera.z > CAM_DEPTH) {
-    const p = seg.p1.screen, spr = SPR[main.name], dh = spr.worldH * p.scale * S / 2, dw = dh * spr.w / spr.h;
-    const cx = p.x + p.w * main.offset;
-    x0 = Math.min(x0, cx - dw * 0.55); x1 = Math.max(x1, cx + dw * 0.55); y0 = Math.min(y0, p.y - dh * 1.05);
-  }
-  y0 = Math.min(y0, HY - H * 0.1);       // keep a strip of sky / horizon for a scenic shot
+  if (!big) y0 = Math.min(y0, HY - H * 0.08);   // small landmark: keep a strip of sky for a scenic shot
   x0 = Math.max(0, x0); x1 = Math.min(W, x1); y0 = Math.max(0, y0); y1 = Math.min(H, y1);
-  let bw = (x1 - x0) * 1.12, bh = (y1 - y0) * 1.08;
+  let bw = (x1 - x0) * 1.06, bh = (y1 - y0) * 1.05;
   if (bw / bh < ar) bw = bh * ar; else bh = bw / ar;
-  bw = Math.max(bw, W * 0.6); bh = bw / ar;
+  bw = Math.max(bw, W * 0.42); bh = bw / ar;      // tighter than before (was 0.6 W): the landmark fills more of the card
   if (bh > H) { bh = H; bw = bh * ar; } if (bw > W) { bw = W; bh = bw / ar; }
   const fx = (x0 + x1) / 2, fy = (y0 + y1) / 2;
   const sw = bw * DPR, sh = bh * DPR;
   const sx = clamp(fx * DPR - sw / 2, 0, cw - sw), sy = clamp(fy * DPR - sh / 2, 0, ch - sh);
+  lastFrame = { x: sx / DPR, y: sy / DPR, w: bw, h: bh, lm: b ? { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1 } : null };
   g.drawImage(canvas, sx, sy, sw, sh, B, B, iw, ih);
   // stamp
   g.save(); g.translate(PW - B - 34, B + 6);
@@ -3508,28 +4039,43 @@ function makePostcardImage(lm) {
   g.fillStyle = '#3d5562'; g.font = `800 13px ${FONT}`; g.textBaseline = 'middle'; g.textAlign = 'left';
   g.fillText(`${lm.name} · ${route.name}`, B + 2, PH - B - CAP / 2 + 1);
   g.fillStyle = '#8aa4b0'; g.font = `600 10px ${FONT}`; g.textAlign = 'right';
-  g.fillText(`鹈鹕骑行 · ${fmtDate(Date.now())}`, PW - B - 2, PH - B - CAP / 2 + 1);
+  g.fillText(`打卡 · ${fmtDate(Date.now())}`, PW - B - 2, PH - B - CAP / 2 + 1);
   let url = c.toDataURL('image/jpeg', 0.72);
   if (url.length > 60000) url = c.toDataURL('image/jpeg', 0.5);
   return url;
 }
+let lastFrame = null;
 const LM_SPRITE = { icecream: 'icecream', volley: 'volley', pier: 'pier', lighthouse: 'lighthouse', sunflower: 'sign_sunflower', barn: 'barn', windmill: 'windmill', orchard: 'applecart',
   cabin: 'cabin', waterfall: 'waterfall', bigoak: 'bigoak', mushvillage: 'mushhouse', teahouse: 'teahouse', sakuratunnel: 'sakuraR', torii: 'shrine', archbridge: 'lantern',
   clocktower: 'clocktower', fishmarket: 'fishmarket', cafe: 'cafe', harbour: 'crane', bigsnowman: 'bigsnowman', cablecar: 'cablestation', icelake: 'skaters', summit: 'viewdeck',
   tvtower: 'tvtower', ferris: 'ferris', nightmarket: 'stallB' };
-function takePhoto() {
-  if (state !== 'play' || paused) return;
-  const lm = ride.zone;
-  if (!lm) { toast('附近没有拍照点哦'); return; }
+// the shared shutter: clean frame → postcard → flash, shutter, toast, happy hop, buzz
+function shootPostcard(lm, auto) {
   render(true);                         // a clean frame (no on-screen controls) for the postcard
   const img = makePostcardImage(lm);
   flash(); snd.shutter();
   const ok = storePostcard(route.key, lm.id, img);
+  const first = !ride.photos.has(lm.id);
   ride.photos.add(lm.id); counters.photos++;
-  buildProgressMarks(); updatePhotoBtn();
-  toast(ok ? `获得明信片「${lm.name}」` : '存储空间不足，明信片没能保存', img, 3000);
-  cheer();
+  if (auto) counters.autoCheckins++;
+  buildProgressMarks(); updatePhotoBtn(); updateProgress();
+  toast(ok ? (first ? `打卡成功 · ${lm.name}` : `又拍了一张 · ${lm.name}`) : '存储空间不足，明信片没能保存', img, 3000);
+  cheer(); rider.hop = 1;
+  buzz([30, 40, 30], 'checkin');
   setTimeout(() => snd.success(), 350);
+  return ok;
+}
+function autoCheckin(lm, why = 'auto') {
+  if (state !== 'play' || paused) return;
+  counters.lastCheckin = { id: lm.id, why, idx: playerIndex(), lmIdx: lmIndex(lm) };
+  shootPostcard(lm, true);
+  if (lastFrame) counters.lastCheckin.frame = lastFrame;
+}
+function takePhoto() {
+  if (state !== 'play' || paused) return;
+  const lm = ride.zone;
+  if (!lm) { toast('附近没有拍照点哦'); return; }
+  shootPostcard(lm, false);
 }
 
 // ---------------------------------------------------------------- album
@@ -3551,12 +4097,12 @@ function renderAlbum(tab) {
   const best = k => (save.best[k] ? fmtTime(save.best[k]) : '—');
   ui.albStats.innerHTML =
     `<span>累计里程 <b>${fmtDist(save.totalDist)}</b></span><span>金币 <b>${save.coins}</b></span>` +
-    `<span>明信片 <b>${postcardCount()}/${POSTCARD_TOTAL}</b></span><span>${ROUTES[tab].full} 最佳 <b>${best(tab)}</b> · 完成 <b>${save.rides[tab] || 0}</b> 次</span>`;
+    `<span>已打卡 <b>${postcardCount()}/${POSTCARD_TOTAL}</b></span><span>${ROUTES[tab].full} 最佳 <b>${best(tab)}</b> · 完成 <b>${save.rides[tab] || 0}</b> 次</span>`;
   ui.albGrid.innerHTML = LANDMARKS[tab].map(lm => {
     const pc = getPostcard(tab, lm.id);
     return pc
-      ? `<figure class="pc got"><img alt="${lm.name}" src="${pc.img}"><figcaption><b>${lm.name}</b><small>${fmtDate(pc.t)}</small></figcaption></figure>`
-      : `<figure class="pc"><div class="ph">${ICON_CAM}<span>未收集</span></div><figcaption><b>${lm.name}</b><small>骑到这里拍照</small></figcaption></figure>`;
+      ? `<figure class="pc got"><img alt="${lm.name}" src="${pc.img}"><i class="stampok">已打卡</i><figcaption><b>${lm.name}</b><small>打卡 · ${fmtDate(pc.t)}</small></figcaption></figure>`
+      : `<figure class="pc"><div class="ph">${ICON_CAM}<span>未打卡</span></div><figcaption><b>${lm.name}</b><small>${settings.checkin === 'auto' ? '骑到这里自动打卡' : '骑到这里拍照'}</small></figcaption></figure>`;
   }).join('');
 }
 function updateTotals() {
@@ -3575,7 +4121,7 @@ function resetRide() {
   buildProgressMarks(); updatePhotoBtn(); updateProgress();
 }
 function startGame() {
-  closeAlbum(); closeEnvPanel(); closeRoutePanel(false);
+  closeAlbum(); closeEnvPanel(); closeRoutePanel(false); closeSettings(); $('wardrobe').classList.add('hidden');
   ui.results.classList.add('hidden');
   state = 'play';
   document.body.classList.add('playing'); document.body.classList.remove('finished');
@@ -3588,6 +4134,7 @@ function startGame() {
 }
 function finishRide() {
   state = 'finished';
+  buzz([80, 60, 80, 60, 160], 'finish');
   document.body.classList.remove('playing'); document.body.classList.add('finished');
   joy.id = null; joy.kx = joy.ky = 0; slider.id = null;
   ride.zone = null; updatePhotoBtn();
@@ -3723,7 +4270,7 @@ function bump(off) {
   const dir = playerX >= off ? 1 : -1;
   bounceV = dir * 1.5; speed *= 0.5; wobble = 1; collCool = 0.7;
   ride.collisions++; counters.collisions++;
-  snd.boing();
+  snd.boing(); buzz(60, 'bump');
   particles.push({ kind: 'boing', text: '咚～', c: '#ff7a45', x: W / 2 + dir * -50 * RIDER_S, y: RIDER_Y - 280 * RIDER_S, vy: -30, life: 0.9, age: 0 });
 }
 function scanSegments(a, b) {
@@ -3745,12 +4292,12 @@ function scanSegments(a, b) {
 
 // ============================================================ simulation
 // little personality for the pelican: blinking, looking around when stopped, pouch puffs, happy wiggles
-const rider = { idle: 0, blink: 0, blinkT: 2, look: 0.72, lookT: 0.4, puff: 0, puffA: -1, puffT: 2.5, spread: 0, happy: 0 };
+const rider = { idle: 0, blink: 0, blinkT: 2, look: 0.72, lookT: 0.4, puff: 0, puffA: -1, puffT: 2.5, spread: 0, happy: 0, hop: 0 };
 function updateRiderMood(dt, sp) {
   rider.idle = sp < 0.05 ? rider.idle + dt : 0;
   rider.blink = Math.max(0, rider.blink - dt);
   rider.blinkT -= dt;
-  if (rider.blinkT <= 0) { rider.blink = 0.13; rider.blinkT = Math.random() < 0.2 ? 0.28 : 2 + Math.random() * 3; }
+  if (rider.blinkT <= 0) { rider.blinks = (rider.blinks || 0) + 1; rider.blink = 0.13; rider.blinkT = Math.random() < 0.2 ? 0.28 : 2 + Math.random() * 3; }
   if (rider.idle > 0.8) {
     rider.lookT -= dt;
     if (rider.lookT <= 0) { rider.look = rider.look > 0 ? -0.72 : 0.72; rider.lookT = 1.2 + Math.random() * 1.3; }
@@ -3760,13 +4307,25 @@ function updateRiderMood(dt, sp) {
   if (rider.puffA >= 0) { rider.puffA += dt / 1.3; rider.puff = Math.sin(Math.min(1, rider.puffA) * Math.PI); if (rider.puffA >= 1) { rider.puffA = -1; rider.puff = 0; } }
   rider.spread = approach(rider.spread, sp > 0.72 ? (sp - 0.72) / 0.28 : 0, 3, dt);
   rider.happy = Math.max(0, rider.happy - dt / 1.6);
+  rider.hop = Math.max(0, rider.hop - dt / 0.6);
 }
 function cheer() {
   rider.happy = 1;
   for (let i = 0; i < 3; i++) particles.push({ kind: 'text', text: i % 2 ? '♥' : '♪', c: i % 2 ? '#ff6f91' : '#2bb3a6', x: W / 2 + (i - 1) * 46 * RIDER_S, y: RIDER_Y - (300 + i * 18) * RIDER_S, vx: (i - 1) * 20, vy: -55, life: 1.2, age: -i * 0.12 });
 }
 let t = 0, crank = 0, wheel = 0, lean = 0, steer = 0, yaw = 0.6, shake = 0, offroad = false;
-let curSegCurve = 0, lastTick = 0;
+let curSegCurve = 0, lastTick = 0, offCool = 0;
+// cruise mode: aim for the next coin within ~25 segments (sidestepping obstacles), else the middle of the path
+function cruiseTarget(i0) {
+  const N = segments.length;
+  let target = 0;
+  for (let i = i0 + 2; i < i0 + 26; i++) { const sg = segments[i % N]; if (sg && sg.items) { const it = sg.items.find(it => !it.taken); if (it) { target = it.offset; break; } } }
+  for (let i = i0 + 1; i < i0 + 14; i++) {
+    const sg = segments[i % N]; if (!sg) continue;
+    for (const sp of sg.sprites) { const w = solidW(sp); if (w && Math.abs(sp.offset - target) < w / 2 / ROAD_W + RIDER_HALF + 0.08) target = sp.offset + (sp.offset > 0 ? -1 : 1) * (w / 2 / ROAD_W + RIDER_HALF + 0.15); }
+  }
+  return clamp(target, -0.85, 0.85);
+}
 function update(dt) {
   t += dt;
   const pSeg = findSegment(position + PLAYER_Z);
@@ -3778,6 +4337,17 @@ function update(dt) {
     const kL = keys.ArrowLeft || keys.KeyA, kR = keys.ArrowRight || keys.KeyD;
     if (joy.id !== null) { const v = joy.kx / (joy.r * 0.8); inSteer = Math.abs(v) < 0.08 ? 0 : v; }
     else inSteer = (kR ? 1 : 0) - (kL ? 1 : 0);
+    // the steering the curve "wants" (cancels the centrifugal drift at the current speed)
+    const comp = sp * pSeg.curve * CENTRIFUGAL / (1.6 * Math.min(1, sp * 1.5) + 1e-3);
+    if (settings.cruise) {                                  // 巡航: only the speed is yours, the pelican steers
+      inSteer = clamp(comp + (cruiseTarget(pSeg.index) - playerX) * 1.6, -1, 1);
+    } else if (settings.assist !== 'off') {                 // 转向辅助: lean into curves, drift back to the path
+      const strong = settings.assist === 'strong', idle = Math.abs(inSteer) < 0.05;
+      inSteer += comp * (strong ? 1 : 0.6);
+      if (idle) inSteer -= playerX * 1.2 * (strong ? 1 : 0.4);
+      else if (Math.abs(playerX) > OFFROAD - 0.1 && Math.sign(inSteer) === Math.sign(playerX)) inSteer *= strong ? 0.35 : 0.7;
+      inSteer = clamp(inSteer, -1, 1);
+    }
     if (keys.ArrowUp || keys.KeyW) targetSpeed = Math.min(1, targetSpeed + dt * 0.55);
     if (keys.ArrowDown || keys.KeyS) targetSpeed = Math.max(0, targetSpeed - dt * 0.7);
   } else {
@@ -3787,7 +4357,10 @@ function update(dt) {
   }
   steer = approach(steer, inSteer, 10, dt);
   // --- speed
+  const wasOff = offroad;
   offroad = Math.abs(playerX) > OFFROAD;
+  offCool -= dt;
+  if (offroad && !wasOff && state === 'play' && offCool <= 0 && speed > MAX_SPEED * 0.1) { buzz([20, 30, 20], 'offroad'); offCool = 1.5; }
   let maxT = state === 'finished' ? 0 : targetSpeed * MAX_SPEED;
   if (offroad) maxT = Math.min(maxT, MAX_SPEED * 0.25);
   speed = approach(speed, maxT, speed < maxT ? 0.75 : (offroad ? 2.2 : (state === 'finished' ? 1.3 : 0.9)), dt);
@@ -3889,7 +4462,7 @@ function drawLights() {
   ctx.globalCompositeOperation = 'lighter';
   for (const L of lights) {
     const a = K * L.a, cx = L.x + L.w / 2, cy = L.y + L.h / 2, r = Math.max(L.w, L.h);
-    if (L.kind === 'bulb') { glow(L.x, L.y, r * 0.9, a * 0.9); ctx.globalAlpha = a; ctx.fillStyle = L.c; circ(ctx, L.x, L.y, Math.max(0.8, r * 0.16)); ctx.fill(); continue; }
+    if (L.kind === 'bulb') { if (Q.glow) glow(L.x, L.y, r * 0.9, a * 0.9); ctx.globalAlpha = a; ctx.fillStyle = L.c; circ(ctx, L.x, L.y, Math.max(0.8, r * 0.16)); ctx.fill(); continue; }
     if (L.kind === 'lamp') {
       glow(cx, cy, Math.min(r * 3.2, H * 0.22), a * 0.9);
       // warm pool of light on the ground
@@ -3950,7 +4523,7 @@ function drawRiderLayer(st) {
 // ---------------------------------------------------------------- weather particles (screen space, capped)
 const rainDrops = [], petals = [], splashes = [];
 const PETAL_COLS = { sakura: ['#ffc4d6', '#ffd9e4', '#ffb3c9', '#fff0f4'], leaves: ['#f4a340', '#e8763a', '#f2c94c', '#d9673a', '#c9a640', '#9cc45a'] };
-function weatherCaps() { const area = W * H; return { rain: Math.round(clamp(area / 7000, 60, 170)), petals: Math.round(clamp(area / 24000, 24, 44)) }; }
+function weatherCaps() { const area = W * H; return { rain: Math.round(clamp(area / 7000, 60, 170) * Q.weather), petals: Math.round(clamp(area / 24000, 24, 44) * Math.max(0.5, Q.weather)) }; }
 function newDrop(top) {
   if (route.precip === 'snow') return { snow: true, x: Math.random() * (W + 200) - 100, y: top ? -Math.random() * H * 0.3 : Math.random() * H, r: (1.1 + Math.random() * 2.4) * Math.max(1, Math.min(W, H) / 700), v: 45 + Math.random() * 70, ph: Math.random() * TAU };
   return { x: Math.random() * (W + 200) - 100, y: top ? -Math.random() * H * 0.3 : Math.random() * H, len: 14 + Math.random() * 16, v: 900 + Math.random() * 500 };
@@ -4061,7 +4634,7 @@ function render(clean = false) {
   riderLights();
   const wob = Math.sin(t * 22) * 0.13 * wobble + Math.sin(t * 15) * 0.07 * rider.happy;
   drawRiderLayer({ crank, wheel, lean: lean + wob, steer, yaw, speed: speed / MAX_SPEED, t, shake: shake + wob * 8,
-    blink: rider.blink > 0 ? 1 : 0, puff: rider.puff, spread: rider.spread, happy: rider.happy });
+    blink: rider.blink > 0 ? 1 : 0, puff: rider.puff, spread: rider.spread, happy: rider.happy, hop: rider.hop });
   reflectorGlow();
   drawSky(t);
   drawWeather();
@@ -4080,12 +4653,27 @@ function updateHud(dt) {
 }
 let last = performance.now();
 function frame(now) {
-  const dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
+  const realDt = Math.max(0, (now - last) / 1000), dt = Math.min(0.05, realDt); last = now;
+  monitorQuality(realDt);
   if (!paused) update(dt);   // paused: simulation + animation clock frozen, scene redrawn as a still
   else updateWeather(0);
   render();
   updateHud(dt);
   requestAnimationFrame(frame);
+}
+
+// app icon (manifest / home screen), drawn from the same pelican as the game — tools/make-icons.js saves the PNGs
+function iconDataURL(size = 512) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d'), u = size / 512;
+  const sky = g.createLinearGradient(0, 0, 0, size); sky.addColorStop(0, '#8fd3f0'); sky.addColorStop(0.6, '#dff4fb'); sky.addColorStop(0.6, '#9fd67f'); sky.addColorStop(1, '#7cc35e');
+  g.fillStyle = sky; g.fillRect(0, 0, size, size);
+  g.fillStyle = '#ffd84d'; circ(g, 400 * u, 96 * u, 46 * u); g.fill();
+  g.fillStyle = '#ffffff'; for (const [x, y, r] of [[96, 120, 26], [128, 110, 34], [164, 122, 24]]) { circ(g, x * u, y * u, r * u); g.fill(); }
+  g.fillStyle = '#e7d3b0'; poly(g, [228 * u, 307 * u, 284 * u, 307 * u, 470 * u, size, 42 * u, size]); g.fill();
+  g.fillStyle = '#ffffff'; for (let i = 0; i < 4; i++) { const v = i / 4, y = 307 + (512 - 307) * v * v; g.fillRect(253 * u, (y + 6) * u, 6 * u, (8 + v * 26) * u); }
+  drawRider(g, 256 * u, 492 * u, 1.55 * u, { crank: 0.8, wheel: 0, lean: 0, steer: 0, yaw: 0.62, speed: 0.4, t: 0, shake: 0, blink: 0, puff: 0.25, spread: 0, happy: 0, hop: 0, outfit: DEFAULT_OUTFIT });
+  return c.toDataURL('image/png');
 }
 
 // debug/inspection hook (used by automated tests)
@@ -4096,16 +4684,35 @@ window.__pelican = {
       collisions: counters.collisions, pickups: counters.pickups, followers: followers.length, save: JSON.parse(JSON.stringify(save)),
       env: { todMode: env.todMode, weatherMode: env.weatherMode, tod: env.tod, clock: env.clock, phase: TOD_NAMES[Math.round(env.clock) % 4], weather: env.weather,
         rain: env.rain, petals: env.petals, night: env.night, dusk: env.dusk, dawn: env.dawn, lightK: env.lightK, tintA: env.tintA, sunVis: env.sun.vis, moonVis: env.moon.vis },
-      litCount, precip: route.precip, petalType: route.petal, routeKeys: ROUTE_KEYS.slice(), fireworks: fw.bursts,
+      litCount, precip: route.precip, petalType: route.petal, routeKeys: ROUTE_KEYS.slice(), fireworks: fw.bursts, fwPeak: fw.maxSparks, fwSparks: fw.sparks.length,
       lim: (segments[playerIndex() % segments.length] || {}).lim || null, onBridge: !!(segments[playerIndex() % segments.length] || {}).bridge,
       lights: lights.length + litCount, drops: rainDrops.length, petalCount: petals.length,
-      rider: { yaw, idle: rider.idle, blink: rider.blink, puff: rider.puff, spread: rider.spread, happy: rider.happy },
+      rider: { yaw, idle: rider.idle, blink: rider.blink, blinks: rider.blinks || 0, puff: rider.puff, spread: rider.spread, happy: rider.happy },
       followerPos: followers.map(f => ({ sx: f.sx, sy: f.sy, ss: f.ss, dz: f.dz, x: f.x, age: f.age })) };
   },
   get audio() { return snd.stats(); },
   get layout() { return { W, H, joy: { x: joy.x, y: joy.y, r: joy.r }, slider: { x: slider.x, top: slider.top, bottom: slider.bottom, w: slider.w } }; },
   debug: {
     setRoute(key) { setRoute(key, false); },
+    setQuality(v) { setQualitySetting(v); },
+    setSetting(k, v) { return setSetting(k, v); },
+    get settings() { return JSON.parse(JSON.stringify(settings)); },
+    get quality() { return { level: qLevel, setting: settings.quality, fps: qMon.lastFps, changes: qMon.changes, log: qMon.log.slice(), dist: DRAW_DIST, dpr: DPR }; },
+    get checkins() { return { auto: counters.autoCheckins, last: counters.lastCheckin }; },
+    get buzz() { return { ...buzzStats }; },
+    addCoins(n) { save.coins += n; persist(); },
+    buyItem(id) { return buyItem(id); },
+    equipItem(id) { return equipItem(id); },
+    get outfit() { return { ...save.outfit }; },
+    get owned() { return save.owned.slice(); },
+    items() { return ITEMS.map(it => ({ id: it.id, price: it.price, pc: it.pc || 0, owned: itemOwned(it.id), lock: itemLockReason(it) })); },
+    exportSave() { return exportSaveText(); },
+    importSave(txt) { return importSaveText(txt); },
+    get saveInfo() { return { key: SAVE_KEY, version: SAVE_VERSION, migrated: saveMigrated, ok: saveOk }; },
+    get pwa() { return { ...pwa, singleFile: SINGLE_FILE }; },
+    iconDataURL(size) { return iconDataURL(size); },
+    hop() { rider.hop = 1; rider.happy = 1; },
+    qualityPreset(level) { return QUALITY[level]; },
     firework() { launchFirework(); },
     landmarks() { return LANDMARKS[route.key].map(lm => ({ id: lm.id, name: lm.name, idx: lmIndex(lm) })); },
     warp(frac) { ride.warped = true; position = Math.max(0, Math.round(frac * JOURNEY) * SEG - PLAYER_Z); ride.lastIdx = playerIndex(); },

@@ -1,6 +1,7 @@
 // v4 (batch 2) verification: time of day, weather, lights, world-space followers, pelican actions, ambient sound.
 // usage: node v4test.js [url]   (needs playwright-core + /usr/bin/google-chrome)
 const { chromium } = require('playwright-core');
+const MANUAL = () => { try { if (!localStorage.getItem('pelicanRide.v2')) localStorage.setItem('pelicanRide.v2', JSON.stringify({ v: 2, settings: { checkin: 'manual' } })); } catch (_) {} };   // batch 4: these older checks use 手动打卡 (photo button / C)
 const OUT = '/workspace/pelican-ride/screenshots';
 const URL = process.argv[2] || 'file:///workspace/pelican-ride/pelican-ride.html';
 const ok = (cond, msg) => { console.log((cond ? 'PASS ' : 'FAIL ') + msg); if (!cond) process.exitCode = 1; };
@@ -19,7 +20,7 @@ const frameStats = page => page.evaluate(() => {
   const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] });
   const errors = [];
   const hook = p => { p.on('console', m => { if (['error', 'warning'].includes(m.type())) errors.push(`[${m.type()}] ${m.text()}`); }); p.on('pageerror', e => errors.push('[pageerror] ' + e.message)); };
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } }); await ctx.addInitScript(MANUAL);
   const page = await ctx.newPage(); hook(page);
   const S = () => page.evaluate(() => window.__pelican.stats);
   const D = (f, ...a) => page.evaluate(([f, a]) => window.__pelican.debug[f](...a), [f, a]);
@@ -100,6 +101,7 @@ const frameStats = page => page.evaluate(() => {
   ok(st.rider.spread > 0.4, `wings spread at high speed (spread ${st.rider.spread.toFixed(2)}, ${st.speedKmh.toFixed(0)} km/h)`);
   await D('setSpeed', 0); await sleep(4500);
   let yawMin = 9, yawMax = -9, blinked = false, puffed = 0, shot = false;
+  const blinks0 = (await S()).rider.blinks || 0;   // blink counter: a 0.13 s blink can fall between 200 ms samples
   for (let i = 0; i < 40; i++) {
     st = await S(); yawMin = Math.min(yawMin, st.rider.yaw); yawMax = Math.max(yawMax, st.rider.yaw);
     if (st.rider.blink > 0) blinked = true; puffed = Math.max(puffed, st.rider.puff);
@@ -107,7 +109,8 @@ const frameStats = page => page.evaluate(() => {
     await sleep(200);
   }
   ok(st.rider.idle > 0.8 && yawMin < -0.5 && yawMax > 0.5, `stopped pelican looks left & right (yaw ${yawMin.toFixed(2)}..${yawMax.toFixed(2)})`);
-  ok(blinked, 'pelican blinks');
+  if (!blinked && (st.rider.blinks || 0) > blinks0) blinked = true;
+  ok(blinked, `pelican blinks (${(st.rider.blinks || 0) - blinks0} blinks in 8 s)`);
   ok(puffed > 0.5, `pelican puffs its pouch (max ${puffed.toFixed(2)})`);
   await D('setSpeed', 0.5); await sleep(2500);
   await D('warpToLandmark', 0, 40); await sleep(900);
@@ -154,7 +157,7 @@ const frameStats = page => page.evaluate(() => {
   ok(s1.env.tod > s0.env.tod && s1.env.todMode === 'auto', 'auto cycle during the ride');
 
   // ---- mobile portrait
-  const m = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  const m = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); await m.addInitScript(MANUAL);
   const mp = await m.newPage(); hook(mp);
   await mp.goto(URL); await sleep(800);
   await mp.tap('#start'); await sleep(400);
@@ -167,7 +170,7 @@ const frameStats = page => page.evaluate(() => {
   await mp.tap('#pause .envseg[data-kind="tod"] button[data-v="3"]'); await sleep(200);
   ok((await mp.evaluate(() => window.__pelican.stats.env.night)) > 0.99, 'mobile tap on 夜晚 works');
   await mp.screenshot({ path: `${OUT}/v4-mobile-pause.png` });
-  const ml = await browser.newContext({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  const ml = await browser.newContext({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); await ml.addInitScript(MANUAL);
   const lp = await ml.newPage(); hook(lp);
   await lp.goto(URL); await sleep(600); await lp.tap('#start'); await sleep(300); await lp.tap('#pauseBtn'); await sleep(300);
   const lb = await lp.evaluate(() => { const r = document.querySelector('#pause .card').getBoundingClientRect(); return { t: r.top, b: r.bottom, H: innerHeight }; });
