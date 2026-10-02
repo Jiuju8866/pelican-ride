@@ -177,7 +177,7 @@
   @keyframes pulse { 0%, 100% { transform: scale(1); box-shadow: 0 4px 0 #e2502a, 0 0 0 0 rgba(255,122,69,0.55); } 50% { transform: scale(1.08); box-shadow: 0 4px 0 #e2502a, 0 0 0 12px rgba(255,122,69,0); } }
   #toast {
     position: fixed; left: 50%; top: 24%; transform: translateX(-50%); z-index: 4; pointer-events: none;
-    display: flex; align-items: center; gap: 10px; max-width: min(92vw, 460px);
+    display: flex; align-items: center; gap: 10px; width: max-content; max-width: min(92vw, 460px);
     background: rgba(255,255,255,0.92); border-radius: 18px; padding: 9px 16px; font-size: 15px; font-weight: 800;
     box-shadow: 0 6px 20px rgba(40,90,110,0.2);
   }
@@ -237,6 +237,28 @@
   #pauseAlbumBtn { background: #fff; color: var(--ink); box-shadow: 0 4px 0 #cfdde3; }
   body.finished #photoBtn { display: none !important; }
 
+  /* ---------- batch 2: time & weather pickers ---------- */
+  body.playing .title-only, body.finished .title-only { display: none !important; }
+  #envBtn { padding: 0 12px 0 10px; }
+  .envpick { display: flex; flex-direction: column; gap: 8px; margin: 0 0 14px; }
+  .envrow { display: flex; align-items: center; gap: 8px; justify-content: center; }
+  .envlab { font-size: 13px; font-weight: 800; opacity: .75; flex: none; width: 2.4em; text-align: right; }
+  .envseg { box-shadow: none; background: #eef6f8; }
+  .envseg button { padding: 6px 10px; font-size: 13px; }
+  .envseg button.active { background: var(--teal); color: #fff; }
+  .envseg[data-kind="tod"] button.active[data-v="2"] { background: #ff8a4c; }
+  .envseg[data-kind="tod"] button.active[data-v="3"] { background: #4b5aa8; }
+  .envseg[data-kind="tod"] button.active[data-v="0"] { background: #f08aa6; }
+  .envseg[data-kind="weather"] button.active[data-v="rain"] { background: #6f86a6; }
+  .envseg[data-kind="weather"] button.active[data-v="petals"] { background: #f08aa6; }
+  .envcard { width: min(420px, 100%); }
+  .envcard h2 { margin: 2px 0 4px; font-size: 24px; color: #2bb3a6; letter-spacing: 2px; }
+  .envsub { font-size: 12px; margin: 0 0 14px; opacity: .75; }
+  #envPanel { z-index: 9; }
+  #pause p { margin-bottom: 12px; }
+  @media (max-width: 380px) { .envseg button { padding: 6px 7px; font-size: 12px; } }
+  @media (max-height: 480px) { .envpick { gap: 5px; margin-bottom: 10px; } #pause .card { padding-top: 14px; padding-bottom: 10px; } #pause h2 { font-size: 24px; } #pause p { margin: 2px 0 8px; } #pause .hint { display: none; } }
+
   #fade { position: fixed; inset: 0; background: #eaf7fb; opacity: 0; pointer-events: none; transition: opacity .35s; }
   #fade.on { opacity: 1; }
 
@@ -280,6 +302,7 @@
   </div>
   <div class="btnrow">
     <button id="pauseBtn" class="iconbtn play-only" title="暂停 / 继续 (P / Esc)">暂停</button>
+    <button id="envBtn" class="iconbtn title-only" title="时间与天气" aria-label="时间与天气"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.6"/><path d="M9 1.8v1.6M3.2 8H1.6M4.6 3.6l1.1 1.1M13.4 3.6l-1.1 1.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M8 20.5h9.5a4 4 0 0 0 .4-8 5.5 5.5 0 0 0-10.4 1.2A3.4 3.4 0 0 0 8 20.5z"/></svg><span>环境</span></button>
     <button id="muteBtn" class="iconbtn" title="静音 (M)">声音</button>
     <button id="home" class="play-only" title="返回标题">菜单</button>
   </div>
@@ -322,10 +345,20 @@
   </div>
 </div>
 
+<div id="envPanel" class="overlay hidden">
+  <div class="card envcard">
+    <h2>时间与天气</h2>
+    <p class="envsub">选「自动」时，骑行中会慢慢日升月落、偶尔下雨或飘花。</p>
+    <div class="envpick"></div>
+    <div class="row"><button id="envClose" class="primary">好的</button></div>
+  </div>
+</div>
+
 <div id="pause" class="hidden">
   <div class="card">
     <h2>已暂停</h2>
     <p>停下来歇一歇，看看风景～</p>
+    <div class="envpick"></div>
     <div class="row">
       <button id="resumeBtn">▶ 继续</button>
       <button id="pauseAlbumBtn">明信片册</button>
